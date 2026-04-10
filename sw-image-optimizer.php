@@ -16,6 +16,10 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+if ( ! defined( 'ABSPATH' ) ) {
+	exit;
+}
+
 require __DIR__ . '/plugin-update-checker/plugin-update-checker.php';
 
 use YahnisElsts\PluginUpdateChecker\v5\PucFactory;
@@ -175,6 +179,12 @@ final class SW_Image_Optimizer {
     public function add_plugin_action_links($links) {
         $url = admin_url('tools.php?page=' . self::PAGE_SLUG);
         array_unshift($links, '<a href="' . esc_url($url) . '">' . esc_html__('Nastavení', 'sw-image-optimizer') . '</a>');
+
+        $management = $this->get_management_context();
+        if ($management['is_active']) {
+            unset($links['deactivate']);
+        }
+
         return $links;
     }
 
@@ -254,8 +264,15 @@ final class SW_Image_Optimizer {
             return;
         }
 
-        wp_enqueue_style('swio-admin', plugin_dir_url(__FILE__) . 'assets/admin.css', [], self::VERSION);
-        wp_enqueue_script('swio-admin', plugin_dir_url(__FILE__) . 'assets/admin.js', [], self::VERSION, true);
+        $css_version = file_exists(plugin_dir_path(__FILE__) . 'assets/admin.css')
+            ? (string) filemtime(plugin_dir_path(__FILE__) . 'assets/admin.css')
+            : self::VERSION;
+        $js_version = file_exists(plugin_dir_path(__FILE__) . 'assets/admin.js')
+            ? (string) filemtime(plugin_dir_path(__FILE__) . 'assets/admin.js')
+            : self::VERSION;
+
+        wp_enqueue_style('swio-admin', plugin_dir_url(__FILE__) . 'assets/admin.css', [], $css_version);
+        wp_enqueue_script('swio-admin', plugin_dir_url(__FILE__) . 'assets/admin.js', [], $js_version, true);
         wp_localize_script('swio-admin', 'swioAdmin', [
             'ajaxUrl' => admin_url('admin-ajax.php'),
             'nonce'   => wp_create_nonce(self::NONCE_ACTION),
@@ -1513,6 +1530,23 @@ final class SW_Image_Optimizer {
         <?php
     }
 }
+
+
+
+add_filter('plugin_action_links', function($actions, $plugin_file) {
+    if ($plugin_file !== plugin_basename(__FILE__)) {
+        return $actions;
+    }
+
+    if (function_exists('sw_guard_get_management_status')) {
+        $status = sw_guard_get_management_status();
+        if ($status === 'ACTIVE') {
+            unset($actions['deactivate']);
+        }
+    }
+
+    return $actions;
+}, 10, 2);
 
 register_activation_hook(__FILE__, ['SW_Image_Optimizer', 'activate']);
 register_deactivation_hook(__FILE__, ['SW_Image_Optimizer', 'deactivate']);
