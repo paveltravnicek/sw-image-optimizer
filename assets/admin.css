@@ -148,6 +148,135 @@
     line-height: 1.2;
 }
 
+
+.swio-license-card {
+    background: #fff;
+    border: 1px solid #dbe5f1;
+    border-radius: 20px;
+    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+    padding: 24px;
+    margin: 0 0 18px;
+}
+
+.swio-license-card__header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 18px;
+}
+
+.swio-license-card h2 {
+    margin: 0 0 8px;
+    font-size: 22px;
+    line-height: 1.25;
+}
+
+.swio-license-intro {
+    margin: 0;
+    color: #475569;
+}
+
+.swio-license-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 36px;
+    padding: 8px 14px;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.swio-license-badge--active {
+    background: rgba(22, 163, 74, 0.12);
+    color: #166534;
+}
+
+.swio-license-badge--inactive {
+    background: rgba(220, 38, 38, 0.12);
+    color: #991b1b;
+}
+
+.swio-license-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+    margin-bottom: 18px;
+}
+
+.swio-license-item {
+    padding: 16px;
+    border-radius: 16px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+}
+
+.swio-license-item strong {
+    display: block;
+    font-size: 16px;
+    line-height: 1.35;
+    color: #0f172a;
+}
+
+.swio-license-item span {
+    display: block;
+    margin-top: 6px;
+    color: #475569;
+}
+
+.swio-license-label {
+    display: block;
+    margin-bottom: 8px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: #64748b;
+}
+
+.swio-license-form-wrap {
+    padding-top: 16px;
+    border-top: 1px solid #e2e8f0;
+}
+
+.swio-license-form {
+    max-width: 720px;
+}
+
+.swio-license-form input[type="text"] {
+    width: 100%;
+    max-width: 100%;
+}
+
+.swio-license-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 12px;
+}
+
+.swio-note {
+    padding: 14px 16px;
+    border-radius: 16px;
+    background: #eff6ff;
+    color: #1d4ed8;
+}
+
+.swio-settings-form fieldset,
+.swio-accordion-panel > fieldset {
+    margin: 0;
+    padding: 0;
+    border: 0;
+}
+
+.swio-settings-form fieldset[disabled],
+.swio-accordion-panel > fieldset[disabled] {
+    opacity: 0.72;
+}
+
+
 .swio-accordion {
     display: grid;
     gap: 12px;
@@ -404,5 +533,27 @@
     .swio-inline-action,
     .swio-inline-action .button {
         width: 100%;
+    }
+}
+
+@media (max-width: 960px) {
+    .swio-license-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .swio-license-card__header {
+        flex-direction: column;
+        align-items: stretch;
+    }
+}
+
+@media (max-width: 782px) {
+    .swio-license-card {
+        padding: 20px;
+    }
+
+    .swio-license-actions {
+        flex-direction: column;
+        align-items: stretch;
     }
 }
