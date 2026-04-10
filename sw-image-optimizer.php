@@ -7,14 +7,13 @@ Author: Smart Websites
 Author URI: https://smart-websites.cz
 Update URI: https://github.com/paveltravnicek/sw-image-optimizer/
 Text Domain: sw-image-optimizer
+SW Plugin: yes
+SW Service Type: passive
+SW License Group: both
 */
 
 if (!defined('ABSPATH')) {
     exit;
-}
-
-if ( ! defined( 'ABSPATH' ) ) {
-	exit;
 }
 
 require __DIR__ . '/plugin-update-checker/plugin-update-checker.php';
@@ -32,6 +31,10 @@ $swUpdateChecker->getVcsApi()->enableReleaseAssets('/\.zip$/i');
 
 final class SW_Image_Optimizer {
     const VERSION = '1.0';
+    const LICENSE_OPTION = 'swio_license';
+    const LICENSE_CRON_HOOK = 'swio_license_daily_check';
+    const HUB_BASE = 'https://smart-websites.cz';
+    const PLUGIN_SLUG = 'sw-image-optimizer';
     const OPTION_SETTINGS = 'swio_settings';
     const OPTION_LOGS = 'swio_logs';
     const OPTION_NOTICE = 'swio_admin_notice';
@@ -66,6 +69,15 @@ final class SW_Image_Optimizer {
         add_filter('intermediate_image_sizes_advanced', [$this, 'filter_intermediate_image_sizes']);
         add_action(self::CRON_SIZE_HOOK, [$this, 'check_and_email_site_size']);
         add_action(self::CRON_LOGS_HOOK, [$this, 'cleanup_old_logs']);
+        add_action(self::LICENSE_CRON_HOOK, [$this, 'cron_refresh_plugin_license']);
+
+        if (is_admin()) {
+            add_filter('plugin_action_links_' . plugin_basename(__FILE__), [$this, 'add_plugin_action_links']);
+            add_action('admin_post_swio_verify_license', [$this, 'handle_verify_license']);
+            add_action('admin_post_swio_remove_license', [$this, 'handle_remove_license']);
+            add_action('admin_init', [$this, 'maybe_refresh_plugin_license']);
+            add_action('admin_init', [$this, 'block_direct_deactivate']);
+        }
     }
 
     public static function activate() {
@@ -76,6 +88,9 @@ final class SW_Image_Optimizer {
         if (!wp_next_scheduled(self::CRON_LOGS_HOOK)) {
             wp_schedule_event(time() + 2 * HOUR_IN_SECONDS, 'daily', self::CRON_LOGS_HOOK);
         }
+        if (!wp_next_scheduled(self::LICENSE_CRON_HOOK)) {
+            wp_schedule_event(time() + 3 * HOUR_IN_SECONDS, 'twicedaily', self::LICENSE_CRON_HOOK);
+        }
         if (!get_option(self::OPTION_SETTINGS)) {
             add_option(self::OPTION_SETTINGS, $instance->get_default_settings());
         }
@@ -84,7 +99,85 @@ final class SW_Image_Optimizer {
     public static function deactivate() {
         wp_clear_scheduled_hook(self::CRON_SIZE_HOOK);
         wp_clear_scheduled_hook(self::CRON_LOGS_HOOK);
+        wp_clear_scheduled_hook(self::LICENSE_CRON_HOOK);
     }
+
+
+    public function cron_refresh_plugin_license() {
+        $this->refresh_plugin_license('cron');
+    }
+
+    private function default_license_state(): array {
+        return [
+            'key' => '',
+            'status' => 'missing',
+            'type' => '',
+            'valid_to' => '',
+            'domain' => '',
+            'message' => '',
+            'last_check' => 0,
+            'last_success' => 0,
+        ];
+    }
+
+    private function get_license_state(): array {
+        $state = get_option(self::LICENSE_OPTION, []);
+        if (!is_array($state)) {
+            $state = [];
+        }
+        return wp_parse_args($state, $this->default_license_state());
+    }
+
+    private function update_license_state(array $data): void {
+        $current = $this->get_license_state();
+        $new = array_merge($current, $data);
+        $new['key'] = sanitize_text_field((string) ($new['key'] ?? ''));
+        $new['status'] = sanitize_key((string) ($new['status'] ?? 'missing'));
+        $new['type'] = sanitize_key((string) ($new['type'] ?? ''));
+        $new['valid_to'] = sanitize_text_field((string) ($new['valid_to'] ?? ''));
+        $new['domain'] = sanitize_text_field((string) ($new['domain'] ?? ''));
+        $new['message'] = sanitize_text_field((string) ($new['message'] ?? ''));
+        $new['last_check'] = (int) ($new['last_check'] ?? 0);
+        $new['last_success'] = (int) ($new['last_success'] ?? 0);
+        update_option(self::LICENSE_OPTION, $new, false);
+    }
+
+    private function get_management_context(): array {
+        $guard_present = function_exists('sw_guard_get_service_state');
+        $management_status = $guard_present ? (string) get_option('swg_management_status', 'NONE') : 'NONE';
+        $service_state = $guard_present ? (string) sw_guard_get_service_state(self::PLUGIN_SLUG) : 'off';
+        $guard_last_success = $guard_present ? (int) get_option('swg_last_success_ts', 0) : 0;
+        $connected_recently = $guard_last_success > 0 && (time() - $guard_last_success) <= (8 * DAY_IN_SECONDS);
+
+        return [
+            'guard_present' => $guard_present,
+            'management_status' => $management_status,
+            'service_state' => in_array($service_state, ['active', 'passive', 'off'], true) ? $service_state : 'off',
+            'guard_last_success' => $guard_last_success,
+            'connected_recently' => $connected_recently,
+            'is_active' => $guard_present && $connected_recently && $management_status === 'ACTIVE' && $service_state === 'active',
+        ];
+    }
+
+    private function has_active_standalone_license(): bool {
+        $license = $this->get_license_state();
+        return $license['key'] !== '' && $license['status'] === 'active' && $license['type'] === 'plugin_single';
+    }
+
+    private function plugin_is_operational(): bool {
+        $management = $this->get_management_context();
+        if ($management['is_active']) {
+            return true;
+        }
+        return $this->has_active_standalone_license();
+    }
+
+    public function add_plugin_action_links($links) {
+        $url = admin_url('tools.php?page=' . self::PAGE_SLUG);
+        array_unshift($links, '<a href="' . esc_url($url) . '">' . esc_html__('Nastavení', 'sw-image-optimizer') . '</a>');
+        return $links;
+    }
+
 
     public function register_cron_schedules($schedules) {
         if (!isset($schedules['weekly'])) {
@@ -124,6 +217,11 @@ final class SW_Image_Optimizer {
     }
 
     public function sanitize_settings($input) {
+        if (!$this->plugin_is_operational()) {
+            $this->add_notice('warning', 'Bez platné licence je nastavení pouze pro čtení.');
+            return $this->get_settings();
+        }
+
         $defaults = $this->get_default_settings();
         $sanitized = [];
         $sanitized['enabled'] = empty($input['enabled']) ? 0 : 1;
@@ -176,6 +274,10 @@ final class SW_Image_Optimizer {
     }
 
     public function filter_intermediate_image_sizes($sizes) {
+        if (!$this->plugin_is_operational()) {
+            return $sizes;
+        }
+
         $settings = $this->get_settings();
         $mode = $settings['disable_sizes_mode'];
 
@@ -193,6 +295,10 @@ final class SW_Image_Optimizer {
     }
 
     public function prefilter_upload($file) {
+        if (!$this->plugin_is_operational()) {
+            return $file;
+        }
+
         $settings = $this->get_settings();
         if (empty($settings['block_extreme_uploads'])) {
             return $file;
@@ -233,6 +339,10 @@ final class SW_Image_Optimizer {
     }
 
     public function handle_uploaded_image($upload) {
+        if (!$this->plugin_is_operational()) {
+            return $upload;
+        }
+
         if (empty($upload['file']) || empty($upload['type'])) {
             return $upload;
         }
@@ -786,6 +896,10 @@ final class SW_Image_Optimizer {
 
         check_ajax_referer(self::NONCE_ACTION, 'nonce');
 
+        if (!$this->plugin_is_operational()) {
+            wp_send_json_error(['message' => 'Plugin momentálně nemá platnou licenci. Akce jsou zablokované.'], 403);
+        }
+
         $action = sanitize_key($_POST['swio_action'] ?? '');
         $offset = max(0, absint($_POST['swio_offset'] ?? 0));
         $result = $this->run_single_action($action, $offset);
@@ -894,12 +1008,229 @@ final class SW_Image_Optimizer {
         return array_reverse($logs);
     }
 
+
+    private function get_license_panel_data(array $license, array $management, bool $is_operational): array {
+        $format_dt = static function(int $ts): string {
+            return $ts > 0 ? wp_date('j. n. Y H:i', $ts) : '—';
+        };
+        $format_date = static function(string $ymd): string {
+            if ($ymd === '') {
+                return '—';
+            }
+            $ts = strtotime($ymd . ' 12:00:00');
+            return $ts ? wp_date('j. n. Y', $ts) : $ymd;
+        };
+
+        $base = [
+            'badge_class' => 'inactive',
+            'badge_label' => 'Licence chybí',
+            'mode'        => 'Samostatná licence pluginu',
+            'subline'     => '',
+            'valid_to'    => '—',
+            'domain'      => '',
+            'last_check'  => '—',
+            'message'     => '',
+        ];
+
+        if ($management['guard_present']) {
+            if ($management['is_active']) {
+                return array_merge($base, [
+                    'badge_class' => 'active',
+                    'badge_label' => 'Platná licence',
+                    'mode'        => 'Správa webu',
+                    'valid_to'    => $format_date((string) get_option('swg_managed_until', '')),
+                    'domain'      => (string) get_option('swg_licence_domain', ''),
+                    'last_check'  => $format_dt((int) $management['guard_last_success']),
+                    'message'     => 'Plugin je provozován v rámci Správy webu.',
+                ]);
+            }
+            if ($management['management_status'] !== 'NONE') {
+                return array_merge($base, [
+                    'badge_class' => 'inactive',
+                    'badge_label' => 'Licence neplatná',
+                    'mode'        => 'Správa webu',
+                    'subline'     => 'Správa webu je po expiraci nebo omezená. Optimalizace obrázků se neprovádí.',
+                    'valid_to'    => $format_date((string) get_option('swg_managed_until', '')),
+                    'domain'      => (string) get_option('swg_licence_domain', ''),
+                    'last_check'  => $format_dt((int) $management['guard_last_success']),
+                    'message'     => 'Po expiraci lze plugin deaktivovat nebo smazat.',
+                ]);
+            }
+        }
+
+        if ($license['status'] === 'active') {
+            return array_merge($base, [
+                'badge_class' => 'active',
+                'badge_label' => 'Platná licence',
+                'mode'        => 'Samostatná licence pluginu',
+                'subline'     => $license['key'] !== '' ? 'Licenční kód: ' . $license['key'] : '',
+                'valid_to'    => $format_date((string) $license['valid_to']),
+                'domain'      => (string) $license['domain'],
+                'last_check'  => $format_dt((int) $license['last_success']),
+                'message'     => $license['message'] !== '' ? $license['message'] : 'Plugin běží přes samostatnou licenci.',
+            ]);
+        }
+
+        return array_merge($base, [
+            'badge_class' => $is_operational ? 'active' : 'inactive',
+            'badge_label' => $is_operational ? 'Platná licence' : 'Licence chybí',
+            'mode'        => 'Samostatná licence pluginu',
+            'subline'     => $license['key'] !== '' ? 'Licenční kód: ' . $license['key'] : 'Zatím nebyl uložen žádný licenční kód.',
+            'valid_to'    => $format_date((string) $license['valid_to']),
+            'domain'      => (string) $license['domain'],
+            'last_check'  => $format_dt((int) $license['last_check']),
+            'message'     => $license['message'] !== '' ? $license['message'] : 'Bez platné licence plugin přestává optimalizovat obrázky a servisní akce jsou zablokované.',
+        ]);
+    }
+
+    public function maybe_refresh_plugin_license() {
+        $management = $this->get_management_context();
+        if ($management['is_active']) {
+            return;
+        }
+
+        $license = $this->get_license_state();
+        if ($license['key'] === '') {
+            return;
+        }
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+        if (!empty($_POST['license_key'])) {
+            return;
+        }
+        if ($license['last_check'] > 0 && (time() - (int) $license['last_check']) < (12 * HOUR_IN_SECONDS)) {
+            return;
+        }
+        $this->refresh_plugin_license('admin-auto');
+    }
+
+    private function refresh_plugin_license(string $reason = 'manual', string $override_key = ''): array {
+        $key = $override_key !== '' ? sanitize_text_field($override_key) : (string) $this->get_license_state()['key'];
+        if ($key === '') {
+            $this->update_license_state([
+                'key' => '',
+                'status' => 'missing',
+                'type' => '',
+                'valid_to' => '',
+                'domain' => '',
+                'message' => 'Licenční kód zatím není uložený.',
+                'last_check' => time(),
+            ]);
+            return ['ok' => false, 'error' => 'missing_key'];
+        }
+
+        $site_id = (string) get_option('swg_site_id', '');
+        $payload = [
+            'license_key' => $key,
+            'plugin_slug' => self::PLUGIN_SLUG,
+            'site_id' => $site_id,
+            'site_url' => home_url('/'),
+            'reason' => $reason,
+            'plugin_version' => self::VERSION,
+        ];
+
+        $res = wp_remote_post(rtrim(self::HUB_BASE, '/') . '/wp-json/swlic/v2/plugin-license', [
+            'timeout' => 20,
+            'headers' => ['Content-Type' => 'application/json'],
+            'body' => wp_json_encode($payload, JSON_UNESCAPED_SLASHES),
+        ]);
+
+        if (is_wp_error($res)) {
+            $this->update_license_state([
+                'key' => $key,
+                'status' => 'error',
+                'message' => $res->get_error_message(),
+                'last_check' => time(),
+            ]);
+            return ['ok' => false, 'error' => $res->get_error_message()];
+        }
+
+        $code = (int) wp_remote_retrieve_response_code($res);
+        $body = (string) wp_remote_retrieve_body($res);
+        $data = json_decode($body, true);
+        if ($code < 200 || $code >= 300 || !is_array($data)) {
+            $api_message = 'Nepodařilo se ověřit licenci.';
+            if (is_array($data) && !empty($data['message'])) {
+                $api_message = sanitize_text_field((string) $data['message']);
+            } elseif ($code > 0) {
+                $api_message = 'Hub vrátil neočekávanou odpověď (HTTP ' . $code . ').';
+            }
+
+            $this->update_license_state([
+                'key' => $key,
+                'status' => 'error',
+                'message' => $api_message,
+                'last_check' => time(),
+            ]);
+            return [
+                'ok' => false,
+                'error' => 'bad_response',
+                'message' => $api_message,
+                'http_code' => $code,
+            ];
+        }
+
+        $this->update_license_state([
+            'key' => $key,
+            'status' => sanitize_key((string) ($data['status'] ?? 'missing')),
+            'type' => sanitize_key((string) ($data['licence_type'] ?? 'plugin_single')),
+            'valid_to' => sanitize_text_field((string) ($data['valid_to'] ?? '')),
+            'domain' => sanitize_text_field((string) ($data['assigned_domain'] ?? '')),
+            'message' => sanitize_text_field((string) ($data['message'] ?? '')),
+            'last_check' => time(),
+            'last_success' => !empty($data['ok']) ? time() : 0,
+        ]);
+
+        return $data;
+    }
+
+    public function handle_verify_license() {
+        if (!current_user_can('manage_options')) {
+            wp_die('Zakázáno.', 'Zakázáno', ['response' => 403]);
+        }
+        check_admin_referer('swio_verify_license');
+        $key = sanitize_text_field((string) ($_POST['license_key'] ?? ''));
+        $result = $this->refresh_plugin_license('manual', $key);
+        $message = !empty($result['message']) ? (string) $result['message'] : (!empty($result['ok']) ? 'Licence byla ověřena.' : 'Licenci se nepodařilo ověřit.');
+        wp_safe_redirect(add_query_arg('swio_license_message', rawurlencode($message), admin_url('tools.php?page=' . self::PAGE_SLUG)));
+        exit;
+    }
+
+    public function handle_remove_license() {
+        if (!current_user_can('manage_options')) {
+            wp_die('Zakázáno.', 'Zakázáno', ['response' => 403]);
+        }
+        check_admin_referer('swio_remove_license');
+        delete_option(self::LICENSE_OPTION);
+        wp_safe_redirect(add_query_arg('swio_license_message', rawurlencode('Licenční kód byl odebrán.'), admin_url('tools.php?page=' . self::PAGE_SLUG)));
+        exit;
+    }
+
+    public function block_direct_deactivate() {
+        $management = $this->get_management_context();
+        if (!$management['is_active']) {
+            return;
+        }
+
+        $action = isset($_GET['action']) ? sanitize_key((string) $_GET['action']) : '';
+        $plugin = isset($_GET['plugin']) ? sanitize_text_field((string) $_GET['plugin']) : '';
+        if ($action === 'deactivate' && $plugin === plugin_basename(__FILE__)) {
+            wp_die('Tento plugin nelze deaktivovat při aktivní správě webu.', 'Chráněný plugin', ['response' => 403]);
+        }
+    }
+
+
     public function render_admin_page() {
         if (!current_user_can('manage_options')) {
             return;
         }
 
         $settings = $this->get_settings();
+        $license = $this->get_license_state();
+        $management = $this->get_management_context();
+        $is_operational = $this->plugin_is_operational();
+        $status_payload = $this->get_license_panel_data($license, $management, $is_operational);
         $sizes = $this->get_registered_image_sizes();
         $report = $this->get_site_size_report();
         $logs = $this->get_logs();
@@ -921,6 +1252,61 @@ final class SW_Image_Optimizer {
             </div>
 
             <?php $this->render_notice(); ?>
+            <?php if (!empty($_GET['swio_license_message'])) : ?>
+                <div class="notice notice-success"><p><?php echo esc_html(sanitize_text_field((string) $_GET['swio_license_message'])); ?></p></div>
+            <?php endif; ?>
+
+            <div class="swio-license-card">
+                <div class="swio-license-card__header">
+                    <div>
+                        <h2><?php echo esc_html__('Licence pluginu', 'sw-image-optimizer'); ?></h2>
+                        <p class="swio-license-intro"><?php echo esc_html__('Plugin může běžet buď v rámci platné správy webu, nebo přes samostatnou licenci.', 'sw-image-optimizer'); ?></p>
+                    </div>
+                    <span class="swio-license-badge swio-license-badge--<?php echo esc_attr($status_payload['badge_class']); ?>"><?php echo esc_html($status_payload['badge_label']); ?></span>
+                </div>
+
+                <div class="swio-license-grid">
+                    <div class="swio-license-item">
+                        <span class="swio-license-label"><?php echo esc_html__('Režim', 'sw-image-optimizer'); ?></span>
+                        <strong><?php echo esc_html($status_payload['mode']); ?></strong>
+                        <?php if ($status_payload['subline'] !== '') : ?><span><?php echo esc_html($status_payload['subline']); ?></span><?php endif; ?>
+                    </div>
+                    <div class="swio-license-item">
+                        <span class="swio-license-label"><?php echo esc_html__('Platnost do', 'sw-image-optimizer'); ?></span>
+                        <strong><?php echo esc_html($status_payload['valid_to']); ?></strong>
+                        <?php if ($status_payload['domain'] !== '') : ?><span><?php echo esc_html($status_payload['domain']); ?></span><?php endif; ?>
+                    </div>
+                    <div class="swio-license-item">
+                        <span class="swio-license-label"><?php echo esc_html__('Poslední ověření', 'sw-image-optimizer'); ?></span>
+                        <strong><?php echo esc_html($status_payload['last_check']); ?></strong>
+                        <?php if ($status_payload['message'] !== '') : ?><span><?php echo esc_html($status_payload['message']); ?></span><?php endif; ?>
+                    </div>
+                </div>
+
+                <?php if (!$management['is_active']) : ?>
+                    <div class="swio-license-form-wrap">
+                        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="swio-license-form">
+                            <?php wp_nonce_field('swio_verify_license'); ?>
+                            <input type="hidden" name="action" value="swio_verify_license">
+                            <label for="swio_license_key"><strong><?php echo esc_html__('Licenční kód pluginu', 'sw-image-optimizer'); ?></strong></label>
+                            <input type="text" id="swio_license_key" name="license_key" value="<?php echo esc_attr($license['key']); ?>" class="regular-text" placeholder="SWLIC-..." />
+                            <p class="description"><?php echo esc_html__('Použijte pouze pro samostatnou licenci pluginu. Pokud máte Správu webu, kód vyplňovat nemusíte.', 'sw-image-optimizer'); ?></p>
+                            <div class="swio-license-actions">
+                                <button type="submit" class="button button-primary"><?php echo esc_html__('Ověřit a uložit licenci', 'sw-image-optimizer'); ?></button>
+                                <?php if ($license['key'] !== '') : ?>
+                                    <a href="<?php echo esc_url(wp_nonce_url(admin_url('admin-post.php?action=swio_remove_license'), 'swio_remove_license')); ?>" class="button button-secondary"><?php echo esc_html__('Odebrat licenční kód', 'sw-image-optimizer'); ?></a>
+                                <?php endif; ?>
+                            </div>
+                        </form>
+                    </div>
+                <?php else : ?>
+                    <div class="swio-note"><?php echo esc_html__('Plugin je provozován v rámci Správy webu. Samostatný licenční kód není potřeba.', 'sw-image-optimizer'); ?></div>
+                <?php endif; ?>
+            </div>
+
+            <?php if (!$is_operational) : ?>
+                <div class="notice notice-warning"><p><?php echo esc_html__('Plugin momentálně nemá platnou licenci. Nastavení zůstává pouze pro čtení, automatická optimalizace se neprovádí a servisní akce jsou zablokované.', 'sw-image-optimizer'); ?></p></div>
+            <?php endif; ?>
 
             <div class="swio-cards">
                 <div class="swio-card">
@@ -949,6 +1335,7 @@ final class SW_Image_Optimizer {
                     </button>
                     <div class="swio-accordion-panel" hidden>
                         <form method="post" action="options.php" class="swio-settings-form">
+                            <fieldset <?php disabled(!$is_operational); ?>>
                             <?php settings_fields('swio_settings_group'); ?>
                             <table class="form-table" role="presentation">
                                 <tr>
@@ -992,6 +1379,7 @@ final class SW_Image_Optimizer {
                                 </tr>
                             </table>
                             <?php submit_button('Uložit nastavení'); ?>
+                            </fieldset>
                         </form>
                     </div>
                 </div>
@@ -1003,6 +1391,7 @@ final class SW_Image_Optimizer {
                     </button>
                     <div class="swio-accordion-panel" hidden>
                         <form method="post" action="options.php" class="swio-settings-form">
+                            <fieldset <?php disabled(!$is_operational); ?>>
                             <?php settings_fields('swio_settings_group'); ?>
                             <table class="form-table" role="presentation">
                                 <tr>
@@ -1036,6 +1425,7 @@ final class SW_Image_Optimizer {
                                 </tr>
                             </table>
                             <?php submit_button('Uložit nastavení velikostí'); ?>
+                            </fieldset>
                         </form>
                     </div>
                 </div>
@@ -1046,6 +1436,7 @@ final class SW_Image_Optimizer {
                         <span class="swio-accordion-icon">+</span>
                     </button>
                     <div class="swio-accordion-panel" hidden>
+                        <fieldset <?php disabled(!$is_operational); ?>>
                         <div class="swio-actions-grid">
                             <?php $this->render_action_card('check_sizes', 'Zkontrolovat velikost webu', 'Provede ruční kontrolu velikosti složek a uloží výsledek do logu.', false); ?>
                             <?php $this->render_action_card('resize_existing', 'Změnit rozměry existujících obrázků', 'Dávkově projde soubory v uploads a automaticky pokračuje až do konce.', true); ?>
@@ -1055,6 +1446,7 @@ final class SW_Image_Optimizer {
                             <?php $this->render_action_card('update_htaccess', 'Aktualizovat fallback v .htaccess', 'Ruční přegenerování pravidel pro chybějící thumbnail URL v uploads/.htaccess.', false); ?>
                         </div>
                         <p class="description">Aktuální počet obrazových příloh v databázi: <?php echo esc_html((string) $attachments_count); ?></p>
+                        </fieldset>
                     </div>
                 </div>
 
@@ -1064,6 +1456,7 @@ final class SW_Image_Optimizer {
                         <span class="swio-accordion-icon">+</span>
                     </button>
                     <div class="swio-accordion-panel" hidden>
+                        <fieldset <?php disabled(!$is_operational); ?>>
                         <div class="swio-log-toolbar">
                             <p>Logy se automaticky čistí po <?php echo esc_html((string) self::LOG_RETENTION_DAYS); ?> dnech.</p>
                             <div class="swio-inline-action">
@@ -1076,6 +1469,7 @@ final class SW_Image_Optimizer {
                                 <div class="swio-action-status" hidden></div>
                             </div>
                         </div>
+                        </fieldset>
                         <div class="swio-log-list">
                             <?php if (empty($logs)) : ?>
                                 <p>Žádné logy.</p>
