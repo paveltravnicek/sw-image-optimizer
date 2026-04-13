@@ -16,10 +16,6 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-if ( ! defined( 'ABSPATH' ) ) {
-	exit;
-}
-
 require __DIR__ . '/plugin-update-checker/plugin-update-checker.php';
 
 use YahnisElsts\PluginUpdateChecker\v5\PucFactory;
@@ -1258,7 +1254,7 @@ final class SW_Image_Optimizer {
                 <div class="swio-hero__content">
                     <span class="swio-badge"><?php echo esc_html__('Smart Websites', 'sw-image-optimizer'); ?></span>
                     <h1><?php echo esc_html__('Optimalizace obrázků', 'sw-image-optimizer'); ?></h1>
-                    <p><?php echo esc_html__('Automatická optimalizace obrázků pro rychlejší načítání webu, menší datovou zátěž a lepší kontrolu nad generovanými velikostmi.', 'sw-image-optimizer'); ?></p>
+                    <p><?php echo esc_html__('Automatické zmenšování obrázků, bezpečnější správa náhledů, přegenerování metadata a interní monitoring velikosti webu.', 'sw-image-optimizer'); ?></p>
                 </div>
                 <div class="swio-hero__meta">
                     <div class="swio-stat">
