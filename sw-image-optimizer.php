@@ -2,7 +2,7 @@
 /*
 Plugin Name: Optimalizace obrázků
 Description: Automatické zmenšování obrázků, bezpečnější správa náhledů, přegenerování metadata a interní monitoring velikosti webu.
-Version: 1.0
+Version: 1.1
 Author: Smart Websites
 Author URI: https://smart-websites.cz
 Update URI: https://github.com/paveltravnicek/sw-image-optimizer/
@@ -30,7 +30,7 @@ $swUpdateChecker->setBranch('main');
 $swUpdateChecker->getVcsApi()->enableReleaseAssets('/\.zip$/i');
 
 final class SW_Image_Optimizer {
-    const VERSION = '1.0';
+    const VERSION = '1.1';
     const LICENSE_OPTION = 'swio_license';
     const LICENSE_CRON_HOOK = 'swio_license_daily_check';
     const HUB_BASE = 'https://smart-websites.cz';
@@ -64,6 +64,7 @@ final class SW_Image_Optimizer {
         add_action('admin_init', [$this, 'register_settings']);
         add_action('admin_enqueue_scripts', [$this, 'enqueue_assets']);
         add_action('wp_ajax_swio_run_action', [$this, 'ajax_run_action']);
+        add_action('wp_ajax_swio_get_logs', [$this, 'ajax_get_logs']);
         add_filter('wp_handle_upload_prefilter', [$this, 'prefilter_upload']);
         add_filter('wp_handle_upload', [$this, 'handle_uploaded_image']);
         add_filter('intermediate_image_sizes_advanced', [$this, 'filter_intermediate_image_sizes']);
@@ -206,6 +207,7 @@ final class SW_Image_Optimizer {
             'process_jpg'                => 1,
             'process_png'                => 1,
             'process_webp'               => 1,
+            'process_avif'               => 1,
             'block_extreme_uploads'      => 0,
             'extreme_dimension_limit'    => 6000,
             'extreme_filesize_limit_mb'  => 15,
@@ -245,13 +247,13 @@ final class SW_Image_Optimizer {
         $sanitized['process_jpg'] = empty($input['process_jpg']) ? 0 : 1;
         $sanitized['process_png'] = empty($input['process_png']) ? 0 : 1;
         $sanitized['process_webp'] = empty($input['process_webp']) ? 0 : 1;
+        $sanitized['process_avif'] = empty($input['process_avif']) ? 0 : 1;
 
         $sanitized['block_extreme_uploads'] = empty($input['block_extreme_uploads']) ? 0 : 1;
         $sanitized['extreme_dimension_limit'] = max(1000, min(20000, absint($input['extreme_dimension_limit'] ?? $defaults['extreme_dimension_limit'])));
         $sanitized['extreme_filesize_limit_mb'] = max(1, min(200, absint($input['extreme_filesize_limit_mb'] ?? $defaults['extreme_filesize_limit_mb'])));
         $sanitized['update_htaccess_fallback'] = empty($input['update_htaccess_fallback']) ? 0 : 1;
 
-        $this->add_notice('success', 'Nastavení pluginu bylo uloženo.');
         return $sanitized;
     }
 
@@ -270,8 +272,10 @@ final class SW_Image_Optimizer {
         wp_enqueue_style('swio-admin', plugin_dir_url(__FILE__) . 'assets/admin.css', [], $css_version);
         wp_enqueue_script('swio-admin', plugin_dir_url(__FILE__) . 'assets/admin.js', [], $js_version, true);
         wp_localize_script('swio-admin', 'swioAdmin', [
-            'ajaxUrl' => admin_url('admin-ajax.php'),
-            'nonce'   => wp_create_nonce(self::NONCE_ACTION),
+            'ajaxUrl'        => admin_url('admin-ajax.php'),
+            'nonce'          => wp_create_nonce(self::NONCE_ACTION),
+            'logsNonce'      => wp_create_nonce(self::NONCE_ACTION),
+            'globalNoticeId' => 'swio-global-notices',
         ]);
     }
 
@@ -381,17 +385,20 @@ final class SW_Image_Optimizer {
     }
 
     private function is_supported_mime_enabled($mime_type, $settings) {
-        if (in_array($mime_type, ['image/jpeg', 'image/jpg'], true)) {
-            return !empty($settings['process_jpg']);
-        }
-        if ($mime_type === 'image/png') {
-            return !empty($settings['process_png']);
-        }
-        if ($mime_type === 'image/webp') {
-            return !empty($settings['process_webp']);
-        }
-        return false;
+    if (in_array($mime_type, ['image/jpeg', 'image/jpg'], true)) {
+        return !empty($settings['process_jpg']);
     }
+    if ($mime_type === 'image/png') {
+        return !empty($settings['process_png']);
+    }
+    if ($mime_type === 'image/webp') {
+        return !empty($settings['process_webp']);
+    }
+    if ($mime_type === 'image/avif') {
+        return !empty($settings['process_avif']);
+    }
+    return false;
+}
 
     private function resize_image_if_needed($file_path, $max_dimension, $jpeg_quality) {
         $response = [
@@ -558,57 +565,187 @@ final class SW_Image_Optimizer {
         return (int) $wpdb->get_var("SELECT COUNT(ID) FROM {$wpdb->posts} WHERE post_type = 'attachment' AND post_mime_type LIKE 'image/%' AND post_status = 'inherit'");
     }
 
-    private function get_image_files_in_uploads($limit = 50, $offset = 0) {
-        $uploads = wp_get_upload_dir();
-        $base_dir = $uploads['basedir'] ?? '';
-        if (!$base_dir || !is_dir($base_dir)) {
-            return [];
-        }
+    
+private function get_supported_image_extensions() {
+    return ['jpg', 'jpeg', 'png', 'webp', 'avif'];
+}
 
-        $supported = ['jpg', 'jpeg', 'png', 'webp'];
-        $files = [];
-
-        try {
-            $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($base_dir, FilesystemIterator::SKIP_DOTS));
-            foreach ($iterator as $file) {
-                if (!$file->isFile()) {
-                    continue;
-                }
-                if (in_array(strtolower($file->getExtension()), $supported, true)) {
-                    $files[] = $file->getPathname();
-                }
-            }
-        } catch (UnexpectedValueException $e) {
-            return [];
-        }
-
-        sort($files, SORT_NATURAL | SORT_FLAG_CASE);
-        return array_slice($files, $offset, $limit);
+private function get_image_files_in_uploads($limit = 50, $offset = 0) {
+    $uploads = wp_get_upload_dir();
+    $base_dir = $uploads['basedir'] ?? '';
+    if (!$base_dir || !is_dir($base_dir)) {
+        return [];
     }
 
-    private function get_total_upload_image_file_count() {
-        $uploads = wp_get_upload_dir();
-        $base_dir = $uploads['basedir'] ?? '';
-        if (!$base_dir || !is_dir($base_dir)) {
-            return 0;
-        }
+    $supported = $this->get_supported_image_extensions();
+    $files = [];
 
-        $count = 0;
-        try {
-            $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($base_dir, FilesystemIterator::SKIP_DOTS));
-            foreach ($iterator as $file) {
-                if ($file->isFile() && in_array(strtolower($file->getExtension()), ['jpg', 'jpeg', 'png', 'webp'], true)) {
-                    $count++;
-                }
+    try {
+        $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($base_dir, FilesystemIterator::SKIP_DOTS));
+        foreach ($iterator as $file) {
+            if (!$file->isFile()) {
+                continue;
             }
-        } catch (UnexpectedValueException $e) {
-            return 0;
+            if (in_array(strtolower((string) $file->getExtension()), $supported, true)) {
+                $files[] = $file->getPathname();
+            }
         }
-
-        return $count;
+    } catch (UnexpectedValueException $e) {
+        return [];
     }
 
-    private function create_batch_response($action, $offset, $processed, $changed, $finished, $label, $details = [], $errors = [], $stats = []) {
+    sort($files, SORT_NATURAL | SORT_FLAG_CASE);
+    return array_slice($files, $offset, $limit);
+}
+
+private function get_total_upload_image_file_count() {
+    $uploads = wp_get_upload_dir();
+    $base_dir = $uploads['basedir'] ?? '';
+    if (!$base_dir || !is_dir($base_dir)) {
+        return 0;
+    }
+
+    $count = 0;
+    $supported = $this->get_supported_image_extensions();
+
+    try {
+        $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($base_dir, FilesystemIterator::SKIP_DOTS));
+        foreach ($iterator as $file) {
+            if ($file->isFile() && in_array(strtolower((string) $file->getExtension()), $supported, true)) {
+                $count++;
+            }
+        }
+    } catch (UnexpectedValueException $e) {
+        return 0;
+    }
+
+    return $count;
+}
+
+private function detect_file_mime_type($file_path) {
+    if (!$file_path || !file_exists($file_path)) {
+        return '';
+    }
+
+    $checked = wp_check_filetype_and_ext($file_path, $file_path);
+    if (!empty($checked['type'])) {
+        return (string) $checked['type'];
+    }
+
+    $by_name = wp_check_filetype($file_path);
+    if (!empty($by_name['type'])) {
+        return (string) $by_name['type'];
+    }
+
+    if (function_exists('mime_content_type')) {
+        $mime = @mime_content_type($file_path);
+        if (is_string($mime) && strpos($mime, 'image/') === 0) {
+            return $mime;
+        }
+    }
+
+    if (function_exists('exif_imagetype')) {
+        $type = @exif_imagetype($file_path);
+        $map = [
+            IMAGETYPE_JPEG => 'image/jpeg',
+            IMAGETYPE_PNG  => 'image/png',
+        ];
+        if (defined('IMAGETYPE_WEBP')) {
+            $map[IMAGETYPE_WEBP] = 'image/webp';
+        }
+        if (defined('IMAGETYPE_AVIF')) {
+            $map[IMAGETYPE_AVIF] = 'image/avif';
+        }
+        if (!empty($map[$type])) {
+            return $map[$type];
+        }
+    }
+
+    $size = @getimagesize($file_path);
+    if (!empty($size['mime']) && strpos((string) $size['mime'], 'image/') === 0) {
+        return (string) $size['mime'];
+    }
+
+    $ext = strtolower((string) pathinfo($file_path, PATHINFO_EXTENSION));
+    $map = [
+        'jpg'  => 'image/jpeg',
+        'jpeg' => 'image/jpeg',
+        'png'  => 'image/png',
+        'webp' => 'image/webp',
+        'avif' => 'image/avif',
+    ];
+
+    return $map[$ext] ?? '';
+}
+
+private function get_attachment_processing_files($attachment_id) {
+    $files = [];
+    $file = get_attached_file($attachment_id);
+    if ($file) {
+        $files[] = $file;
+    }
+
+    $meta = wp_get_attachment_metadata($attachment_id);
+    if (!empty($meta['sizes']) && is_array($meta['sizes']) && $file) {
+        $base_dir = trailingslashit(dirname($file));
+        foreach ($meta['sizes'] as $size_data) {
+            if (!empty($size_data['file'])) {
+                $files[] = $base_dir . $size_data['file'];
+            }
+        }
+    }
+
+    $files = array_values(array_unique(array_filter($files, static function($path) {
+        return is_string($path) && $path !== '';
+    })));
+
+    return $files;
+}
+
+private function get_legitimate_upload_files_map() {
+    $ids = get_posts([
+        'post_type'      => 'attachment',
+        'post_mime_type' => 'image',
+        'post_status'    => 'inherit',
+        'fields'         => 'ids',
+        'posts_per_page' => -1,
+        'orderby'        => 'ID',
+        'order'          => 'ASC',
+    ]);
+
+    $map = [];
+    foreach ($ids as $attachment_id) {
+        foreach ($this->get_attachment_processing_files((int) $attachment_id) as $file_path) {
+            $relative = $this->normalize_upload_relative_path($file_path);
+            $map[$relative] = (int) $attachment_id;
+        }
+    }
+
+    return $map;
+}
+
+private function classify_untracked_upload_file($file_path, array $legitimate_map = []) {
+    $relative = $this->normalize_upload_relative_path($file_path);
+    if (isset($legitimate_map[$relative])) {
+        return 'legitimate';
+    }
+
+    $filename = strtolower((string) basename($file_path));
+    $extension = strtolower((string) pathinfo($filename, PATHINFO_EXTENSION));
+    $stem = strtolower((string) pathinfo($filename, PATHINFO_FILENAME));
+
+    $looks_resized = (bool) preg_match('/-\d+x\d+$/', $stem);
+    $looks_hashed = (bool) preg_match('/^[a-f0-9]{24,}$/', preg_replace('/-\d+x\d+$/', '', $stem));
+    $is_modern_format = in_array($extension, ['webp', 'avif'], true);
+
+    if ($looks_resized || $looks_hashed || $is_modern_format) {
+        return 'external';
+    }
+
+    return 'manual';
+}
+
+private function create_batch_response($action, $offset, $processed, $changed, $finished, $label, $details = [], $errors = [], $stats = []) {
         return [
             'action'      => $action,
             'offset'      => $offset,
@@ -623,61 +760,80 @@ final class SW_Image_Optimizer {
         ];
     }
 
-    private function resize_existing_images_batch($offset = 0) {
-        $settings = $this->get_settings();
-        $batch_size = (int) $settings['batch_size'];
-        $files = $this->get_image_files_in_uploads($batch_size, $offset);
-        $processed = 0;
-        $resized = 0;
-        $details = [];
-        $errors = [];
-        $skipped = 0;
-        $total = $this->get_total_upload_image_file_count();
+    
+private function resize_existing_images_batch($offset = 0) {
+    $settings = $this->get_settings();
+    $batch_size = (int) $settings['batch_size'];
+    $ids = $this->get_image_attachment_ids($batch_size, $offset);
+    $processed = 0;
+    $resized = 0;
+    $details = [];
+    $errors = [];
+    $skipped = 0;
+    $total = $this->get_total_attachment_count();
+
+    foreach ($ids as $attachment_id) {
+        $processed++;
+        $files = $this->get_attachment_processing_files((int) $attachment_id);
+
+        if (empty($files)) {
+            $skipped++;
+            if (count($details) < self::DETAIL_LIMIT) {
+                $details[] = $this->get_attachment_label((int) $attachment_id) . ' — přeskočeno, příloha nemá dohledatelné originální soubory ani standardní velikosti WordPressu.';
+            }
+            continue;
+        }
 
         foreach ($files as $file_path) {
-            $processed++;
-            $mime = wp_check_filetype($file_path)['type'] ?? '';
+            if (!file_exists($file_path) || !is_readable($file_path)) {
+                $errors[] = $this->normalize_upload_relative_path($file_path) . ' — chyba: soubor neexistuje nebo není čitelný.';
+                continue;
+            }
+
+            $mime = $this->detect_file_mime_type($file_path);
             if (!$this->is_supported_mime_enabled($mime, $settings)) {
                 $skipped++;
                 if (count($details) < self::DETAIL_LIMIT) {
-                    $details[] = basename($file_path) . ' — přeskočeno, formát není povolený.';
+                    $details[] = $this->normalize_upload_relative_path($file_path) . ' — přeskočeno, formát není v nastavení pluginu povolený.';
                 }
                 continue;
             }
 
             $result = $this->resize_image_if_needed($file_path, (int) $settings['max_dimension'], (int) $settings['jpeg_quality']);
             if (!empty($result['error'])) {
-                $errors[] = basename($file_path) . ' — chyba: ' . $result['error'];
+                $errors[] = $this->normalize_upload_relative_path($file_path) . ' — chyba: ' . $result['error'];
                 continue;
             }
 
             if ($result['changed']) {
                 $resized++;
                 if (count($details) < self::DETAIL_LIMIT) {
-                    $details[] = sprintf('%s — zmenšeno z %spx na %spx.', basename($file_path), $result['before_max'], $result['after_max']);
+                    $details[] = sprintf('%s — zmenšeno z %spx na %spx.', $this->normalize_upload_relative_path($file_path), $result['before_max'], $result['after_max']);
                 }
             } else {
                 $skipped++;
                 if (count($details) < self::DETAIL_LIMIT) {
-                    $details[] = sprintf('%s — ponecháno, rozměr %spx je už v limitu.', basename($file_path), $result['before_max']);
+                    $details[] = sprintf('%s — ponecháno, rozměr %spx je už v limitu.', $this->normalize_upload_relative_path($file_path), $result['before_max']);
                 }
             }
         }
-
-        $finished = $processed < $batch_size || ($offset + $processed) >= $total;
-        $summary = sprintf('Dávka změny rozměrů: zkontrolováno %d, zmenšeno %d, přeskočeno %d, chyby %d.', $processed, $resized, $skipped, count($errors));
-        $this->log('info', $summary);
-
-        return $this->create_batch_response('resize_existing', $offset, $processed, $resized, $finished, 'Změna rozměrů existujících obrázků', $details, $errors, [
-            'checked' => $processed,
-            'changed' => $resized,
-            'skipped' => $skipped,
-            'errors'  => count($errors),
-            'total'   => $total,
-        ]);
     }
 
-    private function simulate_thumbnail_cleanup_batch($offset = 0) {
+    $finished = $processed < $batch_size || ($offset + $processed) >= $total;
+    $summary = sprintf('Dávka změny rozměrů: zkontrolováno %d příloh, zmenšeno %d souborů, přeskočeno %d, chyby %d.', $processed, $resized, $skipped, count($errors));
+    $this->log('info', $summary);
+
+    return $this->create_batch_response('resize_existing', $offset, $processed, $resized, $finished, 'Změna rozměrů existujících obrázků', $details, $errors, [
+        'checked' => $processed,
+        'changed' => $resized,
+        'skipped' => $skipped,
+        'errors'  => count($errors),
+        'total'   => $total,
+        'why'     => 'Zpracovávají se pouze originální soubory a standardní velikosti evidované WordPressem. Externí varianty mimo metadata WordPressu se do této akce nezahrnují.',
+    ]);
+}
+
+private function simulate_thumbnail_cleanup_batch($offset = 0) {
         $settings = $this->get_settings();
         $batch_size = (int) $settings['batch_size'];
         $ids = $this->get_image_attachment_ids($batch_size, $offset);
@@ -870,39 +1026,172 @@ final class SW_Image_Optimizer {
         ];
     }
 
-    private function run_single_action($action, $offset = 0) {
-        switch ($action) {
-            case 'resize_existing':
-                return $this->resize_existing_images_batch($offset);
-            case 'simulate_cleanup':
-                return $this->simulate_thumbnail_cleanup_batch($offset);
-            case 'delete_cleanup':
-                return $this->delete_thumbnail_cleanup_batch($offset);
-            case 'regenerate_metadata':
-                return $this->regenerate_metadata_batch($offset);
-            case 'check_sizes':
-                $report = $this->get_site_size_report();
-                $this->log('info', sprintf('Ruční kontrola velikosti webu: wp-content %s MB, uploads %s MB, cache %s MB, zálohy %s MB.', $report['wp_content_mb'], $report['uploads_mb'], $report['cache_mb'], $report['backups_mb']));
-                return [
-                    'message' => 'Kontrola velikosti webu proběhla úspěšně.',
-                    'details' => [
-                        'wp-content: ' . $report['wp_content_mb'] . ' MB',
-                        'Uploads: ' . $report['uploads_mb'] . ' MB',
-                        'Cache: ' . $report['cache_mb'] . ' MB',
-                        'Zálohy: ' . $report['backups_mb'] . ' MB',
-                    ],
-                ];
-            case 'update_htaccess':
-                return $this->update_missing_thumbnails_htaccess();
-            case 'clear_logs':
-                delete_option(self::OPTION_LOGS);
-                return ['message' => 'Logy byly smazány.', 'details' => []];
-            default:
-                return new WP_Error('unknown_action', 'Neznámá akce.');
+
+private function audit_external_variants_batch($offset = 0) {
+    $settings = $this->get_settings();
+    $batch_size = (int) $settings['batch_size'];
+    $files = $this->get_image_files_in_uploads($batch_size, $offset);
+    $processed = 0;
+    $details = [];
+    $errors = [];
+    $total = $this->get_total_upload_image_file_count();
+    $legitimate_map = $this->get_legitimate_upload_files_map();
+
+    $legitimate = 0;
+    $external = 0;
+    $manual = 0;
+    $external_bytes = 0;
+    $manual_bytes = 0;
+
+    foreach ($files as $file_path) {
+        $processed++;
+        $relative = $this->normalize_upload_relative_path($file_path);
+        $class = $this->classify_untracked_upload_file($file_path, $legitimate_map);
+        $size = file_exists($file_path) ? (int) filesize($file_path) : 0;
+
+        if ($class === 'legitimate') {
+            $legitimate++;
+            continue;
+        }
+
+        if ($class === 'external') {
+            $external++;
+            $external_bytes += $size;
+            if (count($details) < self::DETAIL_LIMIT) {
+                $details[] = $relative . ' — nalezena externí varianta mimo metadata WordPressu.';
+            }
+            continue;
+        }
+
+        $manual++;
+        $manual_bytes += $size;
+        if (count($details) < self::DETAIL_LIMIT) {
+            $details[] = $relative . ' — soubor není ve WordPress metadata, doporučena ruční kontrola.';
         }
     }
 
-    public function ajax_run_action() {
+    $finished = $processed < $batch_size || ($offset + $processed) >= $total;
+    $this->log('info', sprintf('Audit externích variant: zkontrolováno %d souborů, externí varianty %d, ruční kontrola %d.', $processed, $external, $manual));
+
+    return $this->create_batch_response('audit_external_variants', $offset, $processed, $external + $manual, $finished, 'Audit externích variant obrázků', $details, $errors, [
+        'checked'        => $processed,
+        'changed'        => $external + $manual,
+        'total'          => $total,
+        'legitimate'     => $legitimate,
+        'external'       => $external,
+        'manual'         => $manual,
+        'external_bytes' => $external_bytes,
+        'manual_bytes'   => $manual_bytes,
+        'why'            => 'Audit porovnává skutečné soubory v uploads s originály a standardními velikostmi evidovanými ve WordPress metadata. Vše mimo tento seznam je označeno buď jako externí varianta, nebo jako soubor k ruční kontrole.',
+    ]);
+}
+
+private function delete_external_variants_batch($offset = 0, array $options = []) {
+    $settings = $this->get_settings();
+    $batch_size = (int) $settings['batch_size'];
+    $files = $this->get_image_files_in_uploads($batch_size, $offset);
+    $processed = 0;
+    $details = [];
+    $errors = [];
+    $total = $this->get_total_upload_image_file_count();
+    $legitimate_map = $this->get_legitimate_upload_files_map();
+    $include_manual = !empty($options['include_manual']);
+
+    $deleted = 0;
+    $kept = 0;
+    $manual_deleted = 0;
+    $saved_bytes = 0;
+
+    foreach ($files as $file_path) {
+        $processed++;
+        $relative = $this->normalize_upload_relative_path($file_path);
+        $class = $this->classify_untracked_upload_file($file_path, $legitimate_map);
+
+        if ($class === 'legitimate') {
+            $kept++;
+            continue;
+        }
+
+        if ($class === 'manual' && !$include_manual) {
+            $kept++;
+            if (count($details) < self::DETAIL_LIMIT) {
+                $details[] = $relative . ' — ponecháno, tento soubor je označený k ruční kontrole.';
+            }
+            continue;
+        }
+
+        $size = file_exists($file_path) ? (int) filesize($file_path) : 0;
+        if (file_exists($file_path) && @unlink($file_path)) {
+            $deleted++;
+            $saved_bytes += $size;
+            if ($class === 'manual') {
+                $manual_deleted++;
+            }
+            if (count($details) < self::DETAIL_LIMIT) {
+                $details[] = $relative . ' — smazáno, soubor není evidovaný ve WordPress metadata.';
+            }
+        } else {
+            $errors[] = $relative . ' — nepodařilo se smazat soubor.';
+        }
+    }
+
+    $finished = $processed < $batch_size || ($offset + $processed) >= $total;
+    $this->log('warning', sprintf('Mazání externích variant: zkontrolováno %d souborů, smazáno %d, ponecháno %d, chyby %d.', $processed, $deleted, $kept, count($errors)));
+
+    return $this->create_batch_response('delete_external_variants', $offset, $processed, $deleted, $finished, 'Mazání externích variant obrázků', $details, $errors, [
+        'checked'        => $processed,
+        'changed'        => $deleted,
+        'deleted'        => $deleted,
+        'kept'           => $kept,
+        'manual_deleted' => $manual_deleted,
+        'saved_bytes'    => $saved_bytes,
+        'total'          => $total,
+        'why'            => $include_manual
+            ? 'Mazají se externí varianty mimo WordPress metadata včetně souborů označených k ruční kontrole.'
+            : 'Mazají se pouze externí varianty mimo WordPress metadata. Soubory označené k ruční kontrole zůstávají zachované.',
+    ]);
+}
+
+
+private function run_single_action($action, $offset = 0, array $options = []) {
+    switch ($action) {
+        case 'resize_existing':
+            return $this->resize_existing_images_batch($offset);
+        case 'simulate_cleanup':
+            return $this->simulate_thumbnail_cleanup_batch($offset);
+        case 'delete_cleanup':
+            return $this->delete_thumbnail_cleanup_batch($offset);
+        case 'audit_external_variants':
+            return $this->audit_external_variants_batch($offset);
+        case 'delete_external_variants':
+            return $this->delete_external_variants_batch($offset, $options);
+        case 'regenerate_metadata':
+            return $this->regenerate_metadata_batch($offset);
+        case 'check_sizes':
+            $report = $this->get_site_size_report();
+            $this->log('info', sprintf('Ruční kontrola velikosti webu: wp-content %s MB, uploads %s MB, cache %s MB, zálohy %s MB.', $report['wp_content_mb'], $report['uploads_mb'], $report['cache_mb'], $report['backups_mb']));
+            return [
+                'message' => 'Kontrola velikosti webu proběhla úspěšně.',
+                'details' => [
+                    'wp-content: ' . $report['wp_content_mb'] . ' MB',
+                    'Uploads: ' . $report['uploads_mb'] . ' MB',
+                    'Cache: ' . $report['cache_mb'] . ' MB',
+                    'Zálohy: ' . $report['backups_mb'] . ' MB',
+                ],
+            ];
+        case 'update_htaccess':
+            return $this->update_missing_thumbnails_htaccess();
+        case 'clear_logs':
+            delete_option(self::OPTION_LOGS);
+            $this->add_notice('success', 'Logy byly smazány.');
+            return ['message' => 'Logy byly smazány.', 'details' => [], 'clearNotice' => true];
+        default:
+            return new WP_Error('unknown_action', 'Neznámá akce.');
+    }
+}
+
+public function ajax_run_action() {
+
         if (!current_user_can('manage_options')) {
             wp_send_json_error(['message' => 'Nemáte dostatečná oprávnění.'], 403);
         }
@@ -915,7 +1204,10 @@ final class SW_Image_Optimizer {
 
         $action = sanitize_key($_POST['swio_action'] ?? '');
         $offset = max(0, absint($_POST['swio_offset'] ?? 0));
-        $result = $this->run_single_action($action, $offset);
+        $options = [
+            'include_manual' => !empty($_POST['swio_include_manual']),
+        ];
+        $result = $this->run_single_action($action, $offset, $options);
 
         if (is_wp_error($result)) {
             wp_send_json_error(['message' => $result->get_error_message()], 400);
@@ -924,7 +1216,21 @@ final class SW_Image_Optimizer {
         wp_send_json_success($result);
     }
 
-    private function update_missing_thumbnails_htaccess() {
+
+public function ajax_get_logs() {
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error(['message' => 'Nemáte dostatečná oprávnění.'], 403);
+    }
+
+    check_ajax_referer(self::NONCE_ACTION, 'nonce');
+
+    wp_send_json_success([
+        'html' => $this->get_logs_html(),
+    ]);
+}
+
+private function update_missing_thumbnails_htaccess() {
+
         $uploads = wp_get_upload_dir();
         $base_dir = $uploads['basedir'] ?? '';
         if (!$base_dir || !is_dir($base_dir)) {
@@ -1021,7 +1327,323 @@ final class SW_Image_Optimizer {
         return array_reverse($logs);
     }
 
+    private function get_logs_html() {
+        $logs = $this->get_logs();
+        ob_start();
+        if (empty($logs)) : ?>
+            <p>Žádné logy.</p>
+        <?php else : ?>
+            <?php foreach (array_slice($logs, 0, 50) as $log) : ?>
+                <div class="swio-log-item swio-log-<?php echo esc_attr($log['level']); ?>">
+                    <div class="swio-log-meta"><?php echo esc_html($log['time']); ?> • <?php echo esc_html(strtoupper($log['level'])); ?></div>
+                    <div class="swio-log-message"><?php echo esc_html($log['message']); ?></div>
+                </div>
+            <?php endforeach; ?>
+        <?php endif;
 
+        return trim((string) ob_get_clean());
+    }
+
+    private function render_action_card($action, $label, $description, $is_batch = false, $variant = 'primary') {
+        $button_class = 'button button-primary';
+        if ($variant === 'secondary') {
+            $button_class = 'button';
+        } elseif ($variant === 'danger') {
+            $button_class = 'button button-primary swio-button-danger';
+        }
+        ?>
+        <div class="swio-action-card">
+            <h3><?php echo esc_html($label); ?></h3>
+            <p><?php echo esc_html($description); ?></p>
+            <?php if ($action === 'delete_external_variants') : ?>
+                <p class="swio-action-option">
+                    <label><input type="checkbox" class="swio-include-manual" value="1"> Zahrnout i soubory označené k ruční kontrole</label>
+                </p>
+            <?php endif; ?>
+            <p>
+                <button
+                    type="button"
+                    class="<?php echo esc_attr($button_class); ?> swio-run-action"
+                    data-swio-action="<?php echo esc_attr($action); ?>"
+                    data-swio-batch="<?php echo $is_batch ? '1' : '0'; ?>"
+                ><?php echo esc_html($label); ?></button>
+            </p>
+            <div class="swio-action-status" hidden></div>
+        </div>
+        <?php
+    }
+
+    public function render_admin_page() {
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+
+        $settings = $this->get_settings();
+        $license = $this->get_license_state();
+        $management = $this->get_management_context();
+        $is_operational = $this->plugin_is_operational();
+        $status_payload = $this->get_license_panel_data($license, $management, $is_operational);
+        $sizes = $this->get_registered_image_sizes();
+        $report = $this->get_site_size_report();
+        $logs = $this->get_logs();
+        $attachments_count = $this->get_total_attachment_count();
+        ?>
+        <div class="wrap swio-wrap">
+            <div class="swio-hero">
+                <div class="swio-hero__content">
+                    <span class="swio-badge"><?php echo esc_html__('Smart Websites', 'sw-image-optimizer'); ?></span>
+                    <h1><?php echo esc_html__('Optimalizace obrázků', 'sw-image-optimizer'); ?></h1>
+                    <p><?php echo esc_html__('Automatické zmenšování obrázků, bezpečnější správa náhledů, přegenerování metadata a interní monitoring velikosti webu.', 'sw-image-optimizer'); ?></p>
+                </div>
+                <div class="swio-hero__meta">
+                    <div class="swio-stat">
+                        <strong><?php echo esc_html(self::VERSION); ?></strong>
+                        <span><?php echo esc_html__('Verze pluginu', 'sw-image-optimizer'); ?></span>
+                    </div>
+                </div>
+            </div>
+
+            <?php $this->render_notice(); ?>
+            <div id="swio-global-notices"></div>
+            <?php if (!empty($_GET['swio_license_message'])) : ?>
+                <div class="notice notice-success"><p><?php echo esc_html(sanitize_text_field((string) $_GET['swio_license_message'])); ?></p></div>
+            <?php endif; ?>
+
+            <div class="swio-license-card">
+                <div class="swio-license-card__header">
+                    <div>
+                        <h2><?php echo esc_html__('Licence pluginu', 'sw-image-optimizer'); ?></h2>
+                        <p class="swio-license-intro"><?php echo esc_html__('Plugin může běžet buď v rámci platné správy webu, nebo přes samostatnou licenci.', 'sw-image-optimizer'); ?></p>
+                    </div>
+                    <span class="swio-license-badge swio-license-badge--<?php echo esc_attr($status_payload['badge_class']); ?>"><?php echo esc_html($status_payload['badge_label']); ?></span>
+                </div>
+
+                <div class="swio-license-grid">
+                    <div class="swio-license-item">
+                        <span class="swio-license-label"><?php echo esc_html__('Režim', 'sw-image-optimizer'); ?></span>
+                        <strong><?php echo esc_html($status_payload['mode']); ?></strong>
+                        <?php if ($status_payload['subline'] !== '') : ?><span><?php echo esc_html($status_payload['subline']); ?></span><?php endif; ?>
+                    </div>
+                    <div class="swio-license-item">
+                        <span class="swio-license-label"><?php echo esc_html__('Platnost do', 'sw-image-optimizer'); ?></span>
+                        <strong><?php echo esc_html($status_payload['valid_to']); ?></strong>
+                        <?php if ($status_payload['domain'] !== '') : ?><span><?php echo esc_html($status_payload['domain']); ?></span><?php endif; ?>
+                    </div>
+                    <div class="swio-license-item">
+                        <span class="swio-license-label"><?php echo esc_html__('Poslední ověření', 'sw-image-optimizer'); ?></span>
+                        <strong><?php echo esc_html($status_payload['last_check']); ?></strong>
+                        <?php if ($status_payload['message'] !== '') : ?><span><?php echo esc_html($status_payload['message']); ?></span><?php endif; ?>
+                    </div>
+                </div>
+
+                <?php if (!$management['is_active']) : ?>
+                    <div class="swio-license-form-wrap">
+                        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="swio-license-form">
+                            <?php wp_nonce_field('swio_verify_license'); ?>
+                            <input type="hidden" name="action" value="swio_verify_license">
+                            <label for="swio_license_key"><strong><?php echo esc_html__('Licenční kód pluginu', 'sw-image-optimizer'); ?></strong></label>
+                            <input type="text" id="swio_license_key" name="license_key" value="<?php echo esc_attr($license['key']); ?>" class="regular-text" placeholder="SWLIC-..." />
+                            <p class="description"><?php echo esc_html__('Použijte pouze pro samostatnou licenci pluginu. Pokud máte Správu webu, kód vyplňovat nemusíte.', 'sw-image-optimizer'); ?></p>
+                            <div class="swio-license-actions">
+                                <button type="submit" class="button button-primary"><?php echo esc_html__('Ověřit a uložit licenci', 'sw-image-optimizer'); ?></button>
+                                <?php if ($license['key'] !== '') : ?>
+                                    <a href="<?php echo esc_url(wp_nonce_url(admin_url('admin-post.php?action=swio_remove_license'), 'swio_remove_license')); ?>" class="button button-secondary"><?php echo esc_html__('Odebrat licenční kód', 'sw-image-optimizer'); ?></a>
+                                <?php endif; ?>
+                            </div>
+                        </form>
+                    </div>
+                <?php else : ?>
+                    <div class="swio-note"><?php echo esc_html__('Plugin je provozován v rámci Správy webu. Samostatný licenční kód není potřeba.', 'sw-image-optimizer'); ?></div>
+                <?php endif; ?>
+            </div>
+
+            <?php if (!$is_operational) : ?>
+                <div class="notice notice-warning"><p><?php echo esc_html__('Plugin momentálně nemá platnou licenci. Nastavení zůstává pouze pro čtení, automatická optimalizace se neprovádí a servisní akce jsou zablokované.', 'sw-image-optimizer'); ?></p></div>
+            <?php endif; ?>
+
+            <div class="swio-cards">
+                <div class="swio-card">
+                    <div class="swio-card-label">Velikost wp-content</div>
+                    <div class="swio-card-value"><?php echo esc_html($report['wp_content_mb']); ?> MB</div>
+                </div>
+                <div class="swio-card">
+                    <div class="swio-card-label">Uploads</div>
+                    <div class="swio-card-value"><?php echo esc_html($report['uploads_mb']); ?> MB</div>
+                </div>
+                <div class="swio-card">
+                    <div class="swio-card-label">Cache</div>
+                    <div class="swio-card-value"><?php echo esc_html($report['cache_mb']); ?> MB</div>
+                </div>
+                <div class="swio-card">
+                    <div class="swio-card-label">Zálohy</div>
+                    <div class="swio-card-value"><?php echo esc_html($report['backups_mb']); ?> MB</div>
+                </div>
+            </div>
+
+            <div class="swio-accordion" data-swio-accordion>
+                <div class="swio-accordion-item">
+                    <button type="button" class="swio-accordion-toggle" aria-expanded="true">
+                        <span>Automatická optimalizace nových obrázků</span>
+                        <span class="swio-accordion-icon">+</span>
+                    </button>
+                    <div class="swio-accordion-panel">
+                        <form method="post" action="options.php" class="swio-settings-form">
+                            <fieldset <?php disabled(!$is_operational); ?>>
+                            <?php settings_fields('swio_settings_group'); ?>
+                            <table class="form-table" role="presentation">
+                                <tr>
+                                    <th scope="row">Automatická optimalizace</th>
+                                    <td><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[enabled]" value="1" <?php checked($settings['enabled'], 1); ?>> Zapnout automatické zmenšení po nahrání</label></td>
+                                </tr>
+                                <tr>
+                                    <th scope="row">Maximální rozměr</th>
+                                    <td><input type="number" min="300" max="6000" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[max_dimension]" value="<?php echo esc_attr($settings['max_dimension']); ?>"> px</td>
+                                </tr>
+                                <tr>
+                                    <th scope="row">JPEG kvalita</th>
+                                    <td><input type="number" min="30" max="95" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[jpeg_quality]" value="<?php echo esc_attr($settings['jpeg_quality']); ?>"> <p class="description">Výchozí hodnota je 70 %.</p></td>
+                                </tr>
+                                <tr>
+                                    <th scope="row">Velikost dávky</th>
+                                    <td><input type="number" min="10" max="200" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[batch_size]" value="<?php echo esc_attr($settings['batch_size']); ?>"> obrázků / příloh na jednu dávku</td>
+                                </tr>
+                                <tr>
+                                    <th scope="row">Podporované formáty</th>
+                                    <td>
+                                        <label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[process_jpg]" value="1" <?php checked($settings['process_jpg'], 1); ?>> JPG/JPEG</label><br>
+                                        <label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[process_png]" value="1" <?php checked($settings['process_png'], 1); ?>> PNG</label><br>
+                                        <label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[process_webp]" value="1" <?php checked($settings['process_webp'], 1); ?>> WebP</label>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <th scope="row">Blokace extrémně velkých uploadů</th>
+                                    <td>
+                                        <label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[block_extreme_uploads]" value="1" <?php checked($settings['block_extreme_uploads'], 1); ?>> Zablokovat extrémně velké obrázky ještě před uložením</label>
+                                        <p class="description">Volitelná ochrana pro weby, kde uživatelé nahrávají obrovské fotky.</p>
+                                        <p>
+                                            Limit maximálního rozměru:
+                                            <input type="number" min="1000" max="20000" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[extreme_dimension_limit]" value="<?php echo esc_attr($settings['extreme_dimension_limit']); ?>"> px
+                                        </p>
+                                        <p>
+                                            Limit velikosti souboru:
+                                            <input type="number" min="1" max="200" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[extreme_filesize_limit_mb]" value="<?php echo esc_attr($settings['extreme_filesize_limit_mb']); ?>"> MB
+                                        </p>
+                                    </td>
+                                </tr>
+                            </table>
+                            <?php submit_button('Uložit nastavení'); ?>
+                            </fieldset>
+                        </form>
+                    </div>
+                </div>
+
+                <div class="swio-accordion-item">
+                    <button type="button" class="swio-accordion-toggle" aria-expanded="true">
+                        <span>Správa generovaných velikostí</span>
+                        <span class="swio-accordion-icon">+</span>
+                    </button>
+                    <div class="swio-accordion-panel">
+                        <form method="post" action="options.php" class="swio-settings-form">
+                            <fieldset <?php disabled(!$is_operational); ?>>
+                            <?php settings_fields('swio_settings_group'); ?>
+                            <table class="form-table" role="presentation">
+                                <tr>
+                                    <th scope="row">Režim</th>
+                                    <td>
+                                        <label><input type="radio" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[disable_sizes_mode]" value="none" <?php checked($settings['disable_sizes_mode'], 'none'); ?>> Nic nevypínat</label><br>
+                                        <label><input type="radio" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[disable_sizes_mode]" value="selected" <?php checked($settings['disable_sizes_mode'], 'selected'); ?>> Vypnout jen vybrané velikosti</label><br>
+                                        <label><input type="radio" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[disable_sizes_mode]" value="all" <?php checked($settings['disable_sizes_mode'], 'all'); ?>> Vypnout všechny generované velikosti</label>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <th scope="row">Dostupné velikosti</th>
+                                    <td>
+                                        <div class="swio-size-grid">
+                                            <?php foreach ($sizes as $size_name => $size_data) : ?>
+                                                <label class="swio-size-item">
+                                                    <input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[disabled_sizes][]" value="<?php echo esc_attr($size_name); ?>" <?php checked(in_array($size_name, $settings['disabled_sizes'], true)); ?>>
+                                                    <span><strong><?php echo esc_html($size_name); ?></strong><br><?php echo esc_html($size_data['width']); ?> × <?php echo esc_html($size_data['height']); ?><?php echo !empty($size_data['crop']) ? ' • crop' : ''; ?></span>
+                                                </label>
+                                            <?php endforeach; ?>
+                                        </div>
+                                        <p class="description">Výchozí nastavení je „Vypnout všechny generované velikosti“.</p>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <th scope="row">Fallback po smazání náhledů</th>
+                                    <td>
+                                        <label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[update_htaccess_fallback]" value="1" <?php checked($settings['update_htaccess_fallback'], 1); ?>> Po smazání náhledů automaticky aktualizovat uploads/.htaccess fallback pro chybějící velikosti</label>
+                                        <p class="description">Pomáhá hlavně na Apache. Pokud někde zůstane URL náhledu, server zkusí obsloužit originál bez suffixu typu -300x200.</p>
+                                    </td>
+                                </tr>
+                            </table>
+                            <?php submit_button('Uložit nastavení velikostí'); ?>
+                            </fieldset>
+                        </form>
+                    </div>
+                </div>
+
+                <div class="swio-accordion-item">
+                    <button type="button" class="swio-accordion-toggle" aria-expanded="true">
+                        <span>Servisní nástroje</span>
+                        <span class="swio-accordion-icon">+</span>
+                    </button>
+                    <div class="swio-accordion-panel">
+                        <fieldset <?php disabled(!$is_operational); ?>>
+                        <div class="swio-actions-grid">
+                            <?php $this->render_action_card('check_sizes', 'Zkontrolovat velikost webu', 'Provede ruční kontrolu velikosti složek a uloží výsledek do logu.', false); ?>
+                            <?php $this->render_action_card('resize_existing', 'Změnit rozměry existujících obrázků', 'Projde pouze originální obrázky a standardní velikosti evidované WordPressem. Externí varianty mimo metadata přeskočí.', true); ?>
+                            <?php $this->render_action_card('simulate_cleanup', 'Simulovat mazání evidovaných náhledů', 'Ukáže, které soubory by šly pryč a proč. Prochází dávkově až do konce.', true); ?>
+                            <?php $this->render_action_card('delete_cleanup', 'Smazat evidované náhledy', 'Odstraní jen velikosti evidované v metadata příloh a případně aktualizuje uploads/.htaccess fallback.', true, 'danger'); ?>
+                            <?php $this->render_action_card('regenerate_metadata', 'Přegenerovat metadata a náhledy', 'Přegeneruje metadata a aktuálně povolené velikosti pro všechny přílohy.', true); ?>
+                            <?php $this->render_action_card('audit_external_variants', 'Audit externích variant obrázků', 'Vyhledá soubory v uploads, které nejsou evidované jako originály ani standardní WordPress velikosti.', true, 'secondary'); ?>
+                            <?php $this->render_action_card('delete_external_variants', 'Vyčistit externí varianty obrázků', 'Smaže soubory nalezené auditem jako externí varianty mimo metadata WordPressu.', true, 'danger'); ?>
+                            <?php $this->render_action_card('update_htaccess', 'Aktualizovat fallback v .htaccess', 'Ruční přegenerování pravidel pro chybějící thumbnail URL v uploads/.htaccess.', false); ?>
+                        </div>
+                        <p class="description">Aktuální počet obrazových příloh v databázi: <?php echo esc_html((string) $attachments_count); ?></p>
+                        <p class="description">U mazání externích variant doporučujeme nejprve spustit audit. Pokud si přejete být důraznější, můžete při mazání zahrnout i soubory označené k ruční kontrole.</p>
+                        </fieldset>
+                    </div>
+                </div>
+
+                <div class="swio-accordion-item">
+                    <button type="button" class="swio-accordion-toggle" aria-expanded="true">
+                        <span>Logy a údržba</span>
+                        <span class="swio-accordion-icon">+</span>
+                    </button>
+                    <div class="swio-accordion-panel">
+                        <fieldset <?php disabled(!$is_operational); ?>>
+                        <div class="swio-log-toolbar">
+                            <p>Logy se automaticky čistí po <?php echo esc_html((string) self::LOG_RETENTION_DAYS); ?> dnech.</p>
+                            <div class="swio-inline-action">
+                                <button
+                                    type="button"
+                                    class="button swio-run-action"
+                                    data-swio-action="clear_logs"
+                                    data-swio-batch="0"
+                                >Smazat logy</button>
+                                <div class="swio-action-status" hidden></div>
+                            </div>
+                        </div>
+                        </fieldset>
+                        <div class="swio-log-list">
+                            <?php if (empty($logs)) : ?>
+                                <p>Žádné logy.</p>
+                            <?php else : ?>
+                                <?php foreach (array_slice($logs, 0, 50) as $log) : ?>
+                                    <div class="swio-log-item swio-log-<?php echo esc_attr($log['level']); ?>">
+                                        <div class="swio-log-meta"><?php echo esc_html($log['time']); ?> • <?php echo esc_html(strtoupper($log['level'])); ?></div>
+                                        <div class="swio-log-message"><?php echo esc_html($log['message']); ?></div>
+                                    </div>
+                                <?php endforeach; ?>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <?php
+    }
     private function get_license_panel_data(array $license, array $management, bool $is_operational): array {
         $format_dt = static function(int $ts): string {
             return $ts > 0 ? wp_date('j. n. Y H:i', $ts) : '—';
@@ -1234,297 +1856,9 @@ final class SW_Image_Optimizer {
     }
 
 
-    public function render_admin_page() {
-        if (!current_user_can('manage_options')) {
-            return;
-        }
 
-        $settings = $this->get_settings();
-        $license = $this->get_license_state();
-        $management = $this->get_management_context();
-        $is_operational = $this->plugin_is_operational();
-        $status_payload = $this->get_license_panel_data($license, $management, $is_operational);
-        $sizes = $this->get_registered_image_sizes();
-        $report = $this->get_site_size_report();
-        $logs = $this->get_logs();
-        $attachments_count = $this->get_total_attachment_count();
-        ?>
-        <div class="wrap swio-wrap">
-            <div class="swio-hero">
-                <div class="swio-hero__content">
-                    <span class="swio-badge"><?php echo esc_html__('Smart Websites', 'sw-image-optimizer'); ?></span>
-                    <h1><?php echo esc_html__('Optimalizace obrázků', 'sw-image-optimizer'); ?></h1>
-                    <p><?php echo esc_html__('Automatické zmenšování obrázků, bezpečnější správa náhledů, přegenerování metadata a interní monitoring velikosti webu.', 'sw-image-optimizer'); ?></p>
-                </div>
-                <div class="swio-hero__meta">
-                    <div class="swio-stat">
-                        <strong><?php echo esc_html(self::VERSION); ?></strong>
-                        <span><?php echo esc_html__('Verze pluginu', 'sw-image-optimizer'); ?></span>
-                    </div>
-                </div>
-            </div>
 
-            <?php $this->render_notice(); ?>
-            <?php if (!empty($_GET['swio_license_message'])) : ?>
-                <div class="notice notice-success"><p><?php echo esc_html(sanitize_text_field((string) $_GET['swio_license_message'])); ?></p></div>
-            <?php endif; ?>
 
-            <div class="swio-license-card">
-                <div class="swio-license-card__header">
-                    <div>
-                        <h2><?php echo esc_html__('Licence pluginu', 'sw-image-optimizer'); ?></h2>
-                        <p class="swio-license-intro"><?php echo esc_html__('Plugin může běžet buď v rámci platné správy webu, nebo přes samostatnou licenci.', 'sw-image-optimizer'); ?></p>
-                    </div>
-                    <span class="swio-license-badge swio-license-badge--<?php echo esc_attr($status_payload['badge_class']); ?>"><?php echo esc_html($status_payload['badge_label']); ?></span>
-                </div>
-
-                <div class="swio-license-grid">
-                    <div class="swio-license-item">
-                        <span class="swio-license-label"><?php echo esc_html__('Režim', 'sw-image-optimizer'); ?></span>
-                        <strong><?php echo esc_html($status_payload['mode']); ?></strong>
-                        <?php if ($status_payload['subline'] !== '') : ?><span><?php echo esc_html($status_payload['subline']); ?></span><?php endif; ?>
-                    </div>
-                    <div class="swio-license-item">
-                        <span class="swio-license-label"><?php echo esc_html__('Platnost do', 'sw-image-optimizer'); ?></span>
-                        <strong><?php echo esc_html($status_payload['valid_to']); ?></strong>
-                        <?php if ($status_payload['domain'] !== '') : ?><span><?php echo esc_html($status_payload['domain']); ?></span><?php endif; ?>
-                    </div>
-                    <div class="swio-license-item">
-                        <span class="swio-license-label"><?php echo esc_html__('Poslední ověření', 'sw-image-optimizer'); ?></span>
-                        <strong><?php echo esc_html($status_payload['last_check']); ?></strong>
-                        <?php if ($status_payload['message'] !== '') : ?><span><?php echo esc_html($status_payload['message']); ?></span><?php endif; ?>
-                    </div>
-                </div>
-
-                <?php if (!$management['is_active']) : ?>
-                    <div class="swio-license-form-wrap">
-                        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="swio-license-form">
-                            <?php wp_nonce_field('swio_verify_license'); ?>
-                            <input type="hidden" name="action" value="swio_verify_license">
-                            <label for="swio_license_key"><strong><?php echo esc_html__('Licenční kód pluginu', 'sw-image-optimizer'); ?></strong></label>
-                            <input type="text" id="swio_license_key" name="license_key" value="<?php echo esc_attr($license['key']); ?>" class="regular-text" placeholder="SWLIC-..." />
-                            <p class="description"><?php echo esc_html__('Použijte pouze pro samostatnou licenci pluginu. Pokud máte Správu webu, kód vyplňovat nemusíte.', 'sw-image-optimizer'); ?></p>
-                            <div class="swio-license-actions">
-                                <button type="submit" class="button button-primary"><?php echo esc_html__('Ověřit a uložit licenci', 'sw-image-optimizer'); ?></button>
-                                <?php if ($license['key'] !== '') : ?>
-                                    <a href="<?php echo esc_url(wp_nonce_url(admin_url('admin-post.php?action=swio_remove_license'), 'swio_remove_license')); ?>" class="button button-secondary"><?php echo esc_html__('Odebrat licenční kód', 'sw-image-optimizer'); ?></a>
-                                <?php endif; ?>
-                            </div>
-                        </form>
-                    </div>
-                <?php else : ?>
-                    <div class="swio-note"><?php echo esc_html__('Plugin je provozován v rámci Správy webu. Samostatný licenční kód není potřeba.', 'sw-image-optimizer'); ?></div>
-                <?php endif; ?>
-            </div>
-
-            <?php if (!$is_operational) : ?>
-                <div class="notice notice-warning"><p><?php echo esc_html__('Plugin momentálně nemá platnou licenci. Nastavení zůstává pouze pro čtení, automatická optimalizace se neprovádí a servisní akce jsou zablokované.', 'sw-image-optimizer'); ?></p></div>
-            <?php endif; ?>
-
-            <div class="swio-cards">
-                <div class="swio-card">
-                    <div class="swio-card-label">Velikost wp-content</div>
-                    <div class="swio-card-value"><?php echo esc_html($report['wp_content_mb']); ?> MB</div>
-                </div>
-                <div class="swio-card">
-                    <div class="swio-card-label">Uploads</div>
-                    <div class="swio-card-value"><?php echo esc_html($report['uploads_mb']); ?> MB</div>
-                </div>
-                <div class="swio-card">
-                    <div class="swio-card-label">Cache</div>
-                    <div class="swio-card-value"><?php echo esc_html($report['cache_mb']); ?> MB</div>
-                </div>
-                <div class="swio-card">
-                    <div class="swio-card-label">Zálohy</div>
-                    <div class="swio-card-value"><?php echo esc_html($report['backups_mb']); ?> MB</div>
-                </div>
-            </div>
-
-            <div class="swio-accordion" data-swio-accordion>
-                <div class="swio-accordion-item">
-                    <button type="button" class="swio-accordion-toggle" aria-expanded="false">
-                        <span>Automatická optimalizace nových obrázků</span>
-                        <span class="swio-accordion-icon">+</span>
-                    </button>
-                    <div class="swio-accordion-panel" hidden>
-                        <form method="post" action="options.php" class="swio-settings-form">
-                            <fieldset <?php disabled(!$is_operational); ?>>
-                            <?php settings_fields('swio_settings_group'); ?>
-                            <table class="form-table" role="presentation">
-                                <tr>
-                                    <th scope="row">Automatická optimalizace</th>
-                                    <td><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[enabled]" value="1" <?php checked($settings['enabled'], 1); ?>> Zapnout automatické zmenšení po nahrání</label></td>
-                                </tr>
-                                <tr>
-                                    <th scope="row">Maximální rozměr</th>
-                                    <td><input type="number" min="300" max="6000" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[max_dimension]" value="<?php echo esc_attr($settings['max_dimension']); ?>"> px</td>
-                                </tr>
-                                <tr>
-                                    <th scope="row">JPEG kvalita</th>
-                                    <td><input type="number" min="30" max="95" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[jpeg_quality]" value="<?php echo esc_attr($settings['jpeg_quality']); ?>"> <p class="description">Výchozí hodnota je 70 %.</p></td>
-                                </tr>
-                                <tr>
-                                    <th scope="row">Velikost dávky</th>
-                                    <td><input type="number" min="10" max="200" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[batch_size]" value="<?php echo esc_attr($settings['batch_size']); ?>"> obrázků / příloh na jednu dávku</td>
-                                </tr>
-                                <tr>
-                                    <th scope="row">Podporované formáty</th>
-                                    <td>
-                                        <label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[process_jpg]" value="1" <?php checked($settings['process_jpg'], 1); ?>> JPG/JPEG</label><br>
-                                        <label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[process_png]" value="1" <?php checked($settings['process_png'], 1); ?>> PNG</label><br>
-                                        <label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[process_webp]" value="1" <?php checked($settings['process_webp'], 1); ?>> WebP</label>
-                                    </td>
-                                </tr>
-                                <tr>
-                                    <th scope="row">Blokace extrémně velkých uploadů</th>
-                                    <td>
-                                        <label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[block_extreme_uploads]" value="1" <?php checked($settings['block_extreme_uploads'], 1); ?>> Zablokovat extrémně velké obrázky ještě před uložením</label>
-                                        <p class="description">Volitelná ochrana pro klientské weby, kde uživatelé nahrávají obrovské fotky.</p>
-                                        <p>
-                                            Limit maximálního rozměru:
-                                            <input type="number" min="1000" max="20000" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[extreme_dimension_limit]" value="<?php echo esc_attr($settings['extreme_dimension_limit']); ?>"> px
-                                        </p>
-                                        <p>
-                                            Limit velikosti souboru:
-                                            <input type="number" min="1" max="200" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[extreme_filesize_limit_mb]" value="<?php echo esc_attr($settings['extreme_filesize_limit_mb']); ?>"> MB
-                                        </p>
-                                    </td>
-                                </tr>
-                            </table>
-                            <?php submit_button('Uložit nastavení'); ?>
-                            </fieldset>
-                        </form>
-                    </div>
-                </div>
-
-                <div class="swio-accordion-item">
-                    <button type="button" class="swio-accordion-toggle" aria-expanded="false">
-                        <span>Správa generovaných velikostí</span>
-                        <span class="swio-accordion-icon">+</span>
-                    </button>
-                    <div class="swio-accordion-panel" hidden>
-                        <form method="post" action="options.php" class="swio-settings-form">
-                            <fieldset <?php disabled(!$is_operational); ?>>
-                            <?php settings_fields('swio_settings_group'); ?>
-                            <table class="form-table" role="presentation">
-                                <tr>
-                                    <th scope="row">Režim</th>
-                                    <td>
-                                        <label><input type="radio" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[disable_sizes_mode]" value="none" <?php checked($settings['disable_sizes_mode'], 'none'); ?>> Nic nevypínat</label><br>
-                                        <label><input type="radio" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[disable_sizes_mode]" value="selected" <?php checked($settings['disable_sizes_mode'], 'selected'); ?>> Vypnout jen vybrané velikosti</label><br>
-                                        <label><input type="radio" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[disable_sizes_mode]" value="all" <?php checked($settings['disable_sizes_mode'], 'all'); ?>> Vypnout všechny generované velikosti</label>
-                                    </td>
-                                </tr>
-                                <tr>
-                                    <th scope="row">Dostupné velikosti</th>
-                                    <td>
-                                        <div class="swio-size-grid">
-                                            <?php foreach ($sizes as $size_name => $size_data) : ?>
-                                                <label class="swio-size-item">
-                                                    <input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[disabled_sizes][]" value="<?php echo esc_attr($size_name); ?>" <?php checked(in_array($size_name, $settings['disabled_sizes'], true)); ?>>
-                                                    <span><strong><?php echo esc_html($size_name); ?></strong><br><?php echo esc_html($size_data['width']); ?> × <?php echo esc_html($size_data['height']); ?><?php echo !empty($size_data['crop']) ? ' • crop' : ''; ?></span>
-                                                </label>
-                                            <?php endforeach; ?>
-                                        </div>
-                                        <p class="description">Výchozí nastavení je „Vypnout všechny generované velikosti“.</p>
-                                    </td>
-                                </tr>
-                                <tr>
-                                    <th scope="row">Fallback po smazání náhledů</th>
-                                    <td>
-                                        <label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[update_htaccess_fallback]" value="1" <?php checked($settings['update_htaccess_fallback'], 1); ?>> Po smazání náhledů automaticky aktualizovat uploads/.htaccess fallback pro chybějící velikosti</label>
-                                        <p class="description">Pomáhá hlavně na Apache. Pokud někde zůstane URL náhledu, server zkusí obsloužit originál bez suffixu typu -300x200.</p>
-                                    </td>
-                                </tr>
-                            </table>
-                            <?php submit_button('Uložit nastavení velikostí'); ?>
-                            </fieldset>
-                        </form>
-                    </div>
-                </div>
-
-                <div class="swio-accordion-item">
-                    <button type="button" class="swio-accordion-toggle" aria-expanded="false">
-                        <span>Servisní nástroje</span>
-                        <span class="swio-accordion-icon">+</span>
-                    </button>
-                    <div class="swio-accordion-panel" hidden>
-                        <fieldset <?php disabled(!$is_operational); ?>>
-                        <div class="swio-actions-grid">
-                            <?php $this->render_action_card('check_sizes', 'Zkontrolovat velikost webu', 'Provede ruční kontrolu velikosti složek a uloží výsledek do logu.', false); ?>
-                            <?php $this->render_action_card('resize_existing', 'Změnit rozměry existujících obrázků', 'Dávkově projde soubory v uploads a automaticky pokračuje až do konce.', true); ?>
-                            <?php $this->render_action_card('simulate_cleanup', 'Simulovat mazání evidovaných náhledů', 'Ukáže, které soubory by šly pryč a proč. Prochází dávkově až do konce.', true); ?>
-                            <?php $this->render_action_card('delete_cleanup', 'Smazat evidované náhledy', 'Odstraní jen velikosti evidované v metadata příloh a případně aktualizuje uploads/.htaccess fallback.', true, 'danger'); ?>
-                            <?php $this->render_action_card('regenerate_metadata', 'Přegenerovat metadata a náhledy', 'Přegeneruje metadata a aktuálně povolené velikosti pro všechny přílohy.', true); ?>
-                            <?php $this->render_action_card('update_htaccess', 'Aktualizovat fallback v .htaccess', 'Ruční přegenerování pravidel pro chybějící thumbnail URL v uploads/.htaccess.', false); ?>
-                        </div>
-                        <p class="description">Aktuální počet obrazových příloh v databázi: <?php echo esc_html((string) $attachments_count); ?></p>
-                        </fieldset>
-                    </div>
-                </div>
-
-                <div class="swio-accordion-item">
-                    <button type="button" class="swio-accordion-toggle" aria-expanded="false">
-                        <span>Logy a údržba</span>
-                        <span class="swio-accordion-icon">+</span>
-                    </button>
-                    <div class="swio-accordion-panel" hidden>
-                        <fieldset <?php disabled(!$is_operational); ?>>
-                        <div class="swio-log-toolbar">
-                            <p>Logy se automaticky čistí po <?php echo esc_html((string) self::LOG_RETENTION_DAYS); ?> dnech.</p>
-                            <div class="swio-inline-action">
-                                <button
-                                    type="button"
-                                    class="button swio-run-action"
-                                    data-swio-action="clear_logs"
-                                    data-swio-batch="0"
-                                >Smazat logy</button>
-                                <div class="swio-action-status" hidden></div>
-                            </div>
-                        </div>
-                        </fieldset>
-                        <div class="swio-log-list">
-                            <?php if (empty($logs)) : ?>
-                                <p>Žádné logy.</p>
-                            <?php else : ?>
-                                <?php foreach (array_slice($logs, 0, 50) as $log) : ?>
-                                    <div class="swio-log-item swio-log-<?php echo esc_attr($log['level']); ?>">
-                                        <div class="swio-log-meta"><?php echo esc_html($log['time']); ?> • <?php echo esc_html(strtoupper($log['level'])); ?></div>
-                                        <div class="swio-log-message"><?php echo esc_html($log['message']); ?></div>
-                                    </div>
-                                <?php endforeach; ?>
-                            <?php endif; ?>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-        <?php
-    }
-
-    private function render_action_card($action, $label, $description, $is_batch = false, $variant = 'primary') {
-        $button_class = 'button button-primary';
-        if ($variant === 'secondary') {
-            $button_class = 'button';
-        } elseif ($variant === 'danger') {
-            $button_class = 'button button-primary swio-button-danger';
-        }
-        ?>
-        <div class="swio-action-card">
-            <h3><?php echo esc_html($label); ?></h3>
-            <p><?php echo esc_html($description); ?></p>
-            <p>
-                <button
-                    type="button"
-                    class="<?php echo esc_attr($button_class); ?> swio-run-action"
-                    data-swio-action="<?php echo esc_attr($action); ?>"
-                    data-swio-batch="<?php echo $is_batch ? '1' : '0'; ?>"
-                ><?php echo esc_html($label); ?></button>
-            </p>
-            <div class="swio-action-status" hidden></div>
-        </div>
-        <?php
-    }
 }
 
 
