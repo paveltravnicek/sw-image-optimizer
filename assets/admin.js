@@ -1,4 +1,22 @@
 document.addEventListener('DOMContentLoaded', function () {
+
+  // ── Přesun WP notices pod hero ────────────────────
+  var noticesArea = document.querySelector('.swio-page-notices');
+  if (noticesArea) {
+    var wrap = document.querySelector('.swio-wrap');
+    if (wrap) {
+      var searchRoot = document.getElementById('wpbody-content') || document.body;
+      var toMove = [];
+      searchRoot.querySelectorAll('.notice, div.updated, div.error').forEach(function (el) {
+        if (!wrap.contains(el)) toMove.push(el);
+      });
+      toMove.forEach(function (el) {
+        el.classList.add('swio-notice-hero');
+        noticesArea.insertBefore(el, noticesArea.firstChild);
+      });
+    }
+  }
+
   const cfg = window.swioAdmin || {};
   const ajaxUrl = typeof cfg.ajaxUrl === 'string' && cfg.ajaxUrl ? cfg.ajaxUrl : (window.ajaxurl || '/wp-admin/admin-ajax.php');
   const nonce = cfg.nonce || '';
@@ -221,4 +239,95 @@ document.addEventListener('DOMContentLoaded', function () {
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#039;');
   }
+
+  // ── Náhled před optimalizací ─────────────────────
+  var previewBtn    = document.getElementById('swio-preview-btn');
+  var previewResult = document.getElementById('swio-preview-result');
+
+  if (previewBtn && previewResult) {
+    previewBtn.addEventListener('click', function () {
+      previewBtn.disabled = true;
+      previewBtn.textContent = 'Načítám…';
+
+      var data = new FormData();
+      data.append('action', 'swio_optimization_preview');
+      data.append('nonce', (window.swioAdmin || {}).previewNonce || '');
+
+      fetch(((window.swioAdmin || {}).ajaxUrl || '/wp-admin/admin-ajax.php'), { method: 'POST', body: data })
+        .then(function (r) { return r.json(); })
+        .then(function (json) {
+          previewBtn.disabled = false;
+          previewBtn.textContent = 'Náhled před spuštěním';
+
+          if (!json.success) {
+            previewResult.innerHTML = '<p class="swio-preview-error">Chyba při načítání náhledu.</p>';
+            previewResult.style.display = 'block';
+            return;
+          }
+
+          var d = json.data;
+          var skipText = d.skip_optimized
+            ? 'Již optimalizované (' + d.already_optimized + ') budou přeskočeny.'
+            : 'Přeskakování vypnuto — zpracují se všechny obrázky.';
+
+          previewResult.innerHTML =
+            '<div class="swio-preview-box">' +
+            '<div class="swio-preview-row"><span>Celkem obrázků v knihovně</span><strong>' + d.total + '</strong></div>' +
+            '<div class="swio-preview-row"><span>Již optimalizováno pluginem</span><strong>' + d.already_optimized + '</strong></div>' +
+            '<div class="swio-preview-row swio-preview-row--highlight"><span>Ke zpracování</span><strong>' + d.to_process + '</strong></div>' +
+            '<p class="swio-preview-note">Nastavení: max ' + d.max_dimension + ' px, kvalita ' + d.jpeg_quality + ' %. ' + skipText + '</p>' +
+            '</div>';
+          previewResult.style.display = 'block';
+        })
+        .catch(function () {
+          previewBtn.disabled = false;
+          previewBtn.textContent = 'Náhled před spuštěním';
+          previewResult.innerHTML = '<p class="swio-preview-error">Nepodařilo se načíst náhled.</p>';
+          previewResult.style.display = 'block';
+        });
+    });
+  }
+
+  // ── Progress bar pro hromadnou optimalizaci ───────
+  // Napojíme se na existující resize_existing akci
+  // a zobrazíme progress na základě offset/total
+  var originalAjaxRunAction = null;
+
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest('.swio-run-action[data-swio-action="resize_existing"]');
+    if (!btn) return;
+
+    var progressWrap = document.getElementById('swio-progress-wrap');
+    var progressBar  = document.getElementById('swio-progress-bar');
+    var progressLbl  = document.getElementById('swio-progress-label');
+    var bulkStatus   = document.getElementById('swio-bulk-status');
+
+    if (progressWrap) progressWrap.style.display = 'block';
+
+    // Sledovat progress přes MutationObserver na action-status
+    var statusEl = btn.closest('.swio-action-card') && btn.closest('.swio-action-card').querySelector('.swio-action-status');
+    if (!statusEl || !progressBar) return;
+
+    var observer = new MutationObserver(function () {
+      var text = statusEl.textContent || '';
+      // Parsovat "X / Y" z textu stavu
+      var match = text.match(/(\d+)\s*\/\s*(\d+)/);
+      if (match) {
+        var done  = parseInt(match[1], 10);
+        var total = parseInt(match[2], 10);
+        if (total > 0) {
+          var pct = Math.round((done / total) * 100);
+          progressBar.style.width = pct + '%';
+          if (progressLbl) progressLbl.textContent = pct + ' % (' + done + ' / ' + total + ')';
+        }
+      }
+      if (text.includes('Hotovo') || text.includes('dokončeno') || text.includes('Chyba')) {
+        observer.disconnect();
+        progressBar.style.width = '100%';
+        if (progressLbl) progressLbl.textContent = 'Hotovo';
+      }
+    });
+    observer.observe(statusEl, { childList: true, subtree: true, characterData: true });
+  });
+
 });
