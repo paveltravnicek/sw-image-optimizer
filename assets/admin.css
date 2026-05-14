@@ -1,593 +1,876 @@
+/* Smart Websites – Image Optimizer admin v2.0
+   Design systém shodný s SW Zalomení a SW DB Cleaner
+   -------------------------------------------------- */
+
+/* ─── Wrap ───────────────────────────────────────── */
 .swio-wrap {
-    max-width: none;
-    width: auto;
-    margin: 24px 20px 0 0;
-    padding-bottom: 1px;
-    box-sizing: border-box;
+	max-width: none;
+	margin: 0 20px 0 0;
+	padding: 0 0 48px;
+	box-sizing: border-box;
 }
 
+/* ─── Hero ───────────────────────────────────────── */
 .swio-hero {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: start;
-    gap: 24px;
-    padding: 30px;
-    border-radius: 28px;
-    background: linear-gradient(90deg, #04478A 0%, #0096E2 100%);
-    color: #fff;
-    box-shadow: 0 18px 40px rgba(4, 71, 138, 0.18);
-    margin-bottom: 22px;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 20px;
+	padding: 32px 32px 36px;
+	background: linear-gradient(120deg, #03366e 0%, #0576b5 60%, #0096E2 100%);
+	color: #fff;
+	position: relative;
+	overflow: hidden;
+	margin-bottom: 0;
+}
+
+.swio-hero::after {
+	content: '';
+	position: absolute;
+	right: -60px;
+	top: -60px;
+	width: 320px;
+	height: 320px;
+	border-radius: 50%;
+	background: rgba(255,255,255,0.05);
+	pointer-events: none;
 }
 
 .swio-hero__content {
-    min-width: 0;
+	flex: 1 1 400px;
+	min-width: 0;
+	position: relative;
+	z-index: 1;
 }
 
 .swio-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 7px 14px;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.16);
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: .04em;
-    text-transform: uppercase;
-    margin-bottom: 18px;
+	display: inline-block;
+	background: rgba(255,255,255,0.15);
+	border: 1px solid rgba(255,255,255,0.22);
+	padding: 4px 12px;
+	border-radius: 999px;
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: .06em;
+	text-transform: uppercase;
+	color: rgba(255,255,255,0.9);
+	margin-bottom: 14px;
 }
 
 .swio-hero h1 {
-    color: #fff;
-    font-size: 42px;
-    line-height: 1.08;
-    margin: 0 0 14px;
+	color: #fff !important;
+	font-size: 36px;
+	font-weight: 800;
+	line-height: 1.1;
+	margin: 0 0 12px !important;
+	padding: 0 !important;
+	letter-spacing: -.02em;
 }
 
 .swio-hero p {
-    margin: 0;
-    font-size: 0.9rem;
-    line-height: 1.2;
-    max-width: 72ch;
-    color: rgba(255, 255, 255, 0.94);
+	margin: 0;
+	font-size: 14px;
+	line-height: 1.5;
+	max-width: 60ch;
+	color: rgba(255,255,255,0.78);
 }
 
 .swio-hero__meta {
-    display: flex;
-    align-items: flex-start;
-    justify-content: flex-end;
+	flex: 0 0 auto;
+	display: flex;
+	flex-direction: column;
+	align-items: flex-end;
+	gap: 10px;
+	position: relative;
+	z-index: 1;
 }
 
 .swio-stat {
-    min-width: 220px;
-    padding: 18px 20px;
-    border-radius: 20px;
-    background: rgba(255, 255, 255, 0.14);
-    backdrop-filter: blur(8px);
-    text-align: left;
+	background: rgba(255,255,255,0.13);
+	border: 1px solid rgba(255,255,255,0.2);
+	border-radius: 14px;
+	padding: 12px 18px;
+	text-align: right;
+	min-width: 130px;
 }
 
 .swio-stat strong {
-    display: block;
-    font-size: 24px;
-    color: #fff;
+	display: block;
+	font-size: 22px;
+	font-weight: 800;
+	color: #fff;
+	line-height: 1;
 }
 
 .swio-stat span {
-    display: block;
-    margin-top: 4px;
-    color: rgba(255, 255, 255, 0.9);
+	display: block;
+	font-size: 11px;
+	color: rgba(255,255,255,0.65);
+	margin-top: 3px;
+	text-transform: uppercase;
+	letter-spacing: .05em;
 }
 
-.swio-wrap .notice {
-    background: #111111;
-    border: 1px solid #111111;
-    border-left-width: 4px;
-    padding: 15px;
-    border-radius: 15px;
-    color: #ffffff;
-    box-sizing: border-box;
+/* Licence status badge v hero */
+.swio-hero-status {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	border-radius: 999px;
+	padding: 5px 12px 5px 8px;
+	font-size: 12px;
+	font-weight: 700;
+	color: #fff;
 }
 
-.swio-wrap .notice-success,
-.swio-wrap .updated {
-    border-left-color: #00a32a;
+.swio-hero-status--active  { background: #16a34a; }
+.swio-hero-status--inactive {
+	background: rgba(255,255,255,0.18);
+	border: 1px solid rgba(255,255,255,0.25);
 }
 
-.swio-wrap .notice-error,
-.swio-wrap .error {
-    border-left-color: #d63638;
+.swio-hero-status__dot {
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: #86efac;
+	flex-shrink: 0;
 }
 
-.swio-wrap .notice-warning {
-    border-left-color: #dba617;
+.swio-hero-status--inactive .swio-hero-status__dot {
+	background: rgba(255,255,255,0.5);
 }
 
-.swio-wrap .notice-info {
-    border-left-color: #72aee6;
+/* ─── Notices ────────────────────────────────────── */
+/* WP notices uvnitř wrap – tmavý styl (jsou vizuálně v hero) */
+.swio-wrap .notice,
+.swio-wrap div.updated,
+.swio-wrap div.error {
+	background: rgba(0, 0, 0, 0.18) !important;
+	color: #ffffff !important;
+	border: 1px solid rgba(255, 255, 255, 0.25) !important;
+	border-left-width: 5px !important;
+	border-radius: 12px !important;
+	box-shadow: none !important;
+	margin: 0 0 10px !important;
+	padding: 12px 16px !important;
+}
+
+.swio-wrap .notice *,
+.swio-wrap div.updated *,
+.swio-wrap div.error * { color: #ffffff !important; }
+
+.swio-wrap .notice p,
+.swio-wrap div.updated p,
+.swio-wrap div.error p {
+	color: #ffffff !important;
+	margin: 0 !important;
+	font-size: 13px !important;
 }
 
 .swio-wrap .notice a,
-.swio-wrap .notice p {
-    color: #ffffff;
+.swio-wrap div.updated a { color: #bfdbfe !important; }
+
+.swio-wrap .notice-success, .swio-wrap .updated { border-left-color: #4ade80 !important; }
+.swio-wrap .notice-warning { border-left-color: #fbbf24 !important; }
+.swio-wrap .notice-error, .swio-wrap .error { border-left-color: #f87171 !important; }
+.swio-wrap .notice-info { border-left-color: #60a5fa !important; }
+
+/* Naše vlastní notices (swio-page-notices) – světlé, pod hero */
+.swio-page-notices {
+	padding: 16px 32px 0;
+	margin-top: 16px;
 }
 
-.swio-wrap .notice p {
-    margin: 0;
+.swio-page-notices:empty { display: none; }
+
+.swio-page-notices .notice,
+.swio-page-notices div.updated,
+.swio-page-notices div.error {
+	background: #ffffff !important;
+	color: #1e293b !important;
+	border: 1px solid #e2e8f0 !important;
+	border-left-width: 4px !important;
+	border-radius: 12px !important;
+	box-shadow: 0 1px 4px rgba(15,23,42,0.06) !important;
+	margin: 0 0 10px !important;
+	padding: 12px 16px !important;
 }
 
-.swio-cards {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-    gap: 14px;
-    margin: 18px 0 20px;
-}
+.swio-page-notices .notice p { color: #1e293b !important; margin: 0 !important; font-size: 13px !important; }
+.swio-page-notices .notice-success, .swio-page-notices .updated { border-left-color: #16a34a !important; }
+.swio-page-notices .notice-warning { border-left-color: #d97706 !important; }
+.swio-page-notices .notice-error { border-left-color: #dc2626 !important; }
 
-.swio-card,
-.swio-action-card,
-.swio-accordion-item {
-    background: #fff;
-    border: 1px solid #dbe5f1;
-    border-radius: 16px;
-    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+/* ─── Hlavní obsah ───────────────────────────────── */
+.swio-main-content {
+	padding: 20px 32px 0;
 }
-
-.swio-card {
-    padding: 18px 20px;
-}
-
-.swio-card-label {
-    font-size: 13px;
-    color: #50575e;
-    margin-bottom: 10px;
-}
-
-.swio-card-value {
-    font-size: 26px;
-    font-weight: 700;
-    line-height: 1.2;
-}
-
 
 .swio-license-card {
-    background: #fff;
-    border: 1px solid #dbe5f1;
-    border-radius: 20px;
-    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
-    padding: 24px;
-    margin: 0 0 18px;
+	margin-bottom: 20px;
+}
+
+/* ─── Licence panel ──────────────────────────────── */
+.swio-license-card {
+	background: #fff;
+	border: 1px solid #e2e8f0;
+	border-radius: 18px;
+	overflow: hidden;
+	margin-bottom: 20px;
+	box-shadow: 0 1px 6px rgba(15,23,42,0.06);
 }
 
 .swio-license-card__header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 16px;
-    margin-bottom: 18px;
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	padding: 20px 22px 16px;
+	border-bottom: 1px solid #f1f5f9;
+	gap: 16px;
 }
 
-.swio-license-card h2 {
-    margin: 0 0 8px;
-    font-size: 22px;
-    line-height: 1.25;
+.swio-license-card__header h2 {
+	font-size: 16px !important;
+	font-weight: 700 !important;
+	color: #0f172a !important;
+	margin: 0 0 3px !important;
+	padding: 0 !important;
 }
 
 .swio-license-intro {
-    margin: 0;
-    color: #475569;
+	margin: 0 !important;
+	font-size: 12px;
+	color: #94a3b8;
 }
 
 .swio-license-badge {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 36px;
-    padding: 8px 14px;
-    border-radius: 999px;
-    font-size: 13px;
-    font-weight: 700;
-    white-space: nowrap;
+	flex-shrink: 0;
+	display: inline-flex;
+	align-items: center;
+	padding: 5px 14px;
+	border-radius: 999px;
+	font-size: 12px;
+	font-weight: 700;
+	white-space: nowrap;
 }
 
-.swio-license-badge--active {
-    background: rgba(22, 163, 74, 0.12);
-    color: #166534;
-}
-
-.swio-license-badge--inactive {
-    background: rgba(220, 38, 38, 0.12);
-    color: #991b1b;
-}
+.swio-license-badge--active   { background: #dcfce7; color: #15803d; }
+.swio-license-badge--inactive { background: #fee2e2; color: #b91c1c; }
 
 .swio-license-grid {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 14px;
-    margin-bottom: 18px;
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	border-bottom: 1px solid #f1f5f9;
 }
 
 .swio-license-item {
-    padding: 16px;
-    border-radius: 16px;
-    background: #f8fafc;
-    border: 1px solid #e2e8f0;
+	padding: 16px 22px;
+	border-right: 1px solid #f1f5f9;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
 }
 
-.swio-license-item strong {
-    display: block;
-    font-size: 16px;
-    line-height: 1.35;
-    color: #0f172a;
-}
-
-.swio-license-item span {
-    display: block;
-    margin-top: 6px;
-    color: #475569;
-}
+.swio-license-item:last-child { border-right: none; }
 
 .swio-license-label {
-    display: block;
-    margin-bottom: 8px;
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: .04em;
-    text-transform: uppercase;
-    color: #64748b;
+	font-size: 10px;
+	font-weight: 700;
+	letter-spacing: .06em;
+	text-transform: uppercase;
+	color: #94a3b8;
 }
 
+.swio-license-item strong { font-size: 15px; font-weight: 700; color: #0f172a; }
+.swio-license-item span   { font-size: 12px; color: #64748b; }
+
 .swio-license-form-wrap {
-    padding-top: 16px;
-    border-top: 1px solid #e2e8f0;
+	padding: 18px 22px;
+	background: #fafcff;
+	border-top: 1px solid #f1f5f9;
 }
 
 .swio-license-form {
-    max-width: 720px;
+	display: grid;
+	gap: 8px;
+	max-width: 520px;
 }
 
+.swio-license-form label { font-size: 13px; font-weight: 600; color: #374151; }
+
 .swio-license-form input[type="text"] {
-    width: 100%;
-    max-width: 100%;
+	border-radius: 9px !important;
+	border-color: #e2e8f0 !important;
+	font-size: 13px;
+	height: 36px;
 }
 
 .swio-license-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-    margin-top: 12px;
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	align-items: center;
+	margin-top: 4px;
 }
 
 .swio-note {
-    padding: 14px 16px;
-    border-radius: 16px;
-    background: #eff6ff;
-    color: #1d4ed8;
+	padding: 14px 22px;
+	font-size: 12px;
+	color: #64748b;
+	background: #fafcff;
+	border-top: 1px solid #f1f5f9;
 }
 
-.swio-settings-form fieldset,
-.swio-accordion-panel > fieldset {
-    margin: 0;
-    padding: 0;
-    border: 0;
+/* ─── Stats karty (wp-content, uploads…) ─────────── */
+.swio-cards {
+	display: grid;
+	grid-template-columns: repeat(5, minmax(0, 1fr));
+	gap: 12px;
+	margin-bottom: 20px;
 }
 
-.swio-settings-form fieldset[disabled],
-.swio-accordion-panel > fieldset[disabled] {
-    opacity: 0.72;
+.swio-card {
+	background: #fff;
+	border: 1px solid #e2e8f0;
+	border-radius: 14px;
+	padding: 16px 18px;
+	box-shadow: 0 1px 4px rgba(15,23,42,0.05);
 }
 
+.swio-card-label {
+	font-size: 10px;
+	font-weight: 700;
+	letter-spacing: .06em;
+	text-transform: uppercase;
+	color: #94a3b8;
+	margin-bottom: 6px;
+}
 
+.swio-card-value {
+	font-size: 20px;
+	font-weight: 800;
+	color: #0f172a;
+	line-height: 1.2;
+}
+
+/* ─── Accordion ──────────────────────────────────── */
 .swio-accordion {
-    display: grid;
-    gap: 12px;
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+
+.swio-accordion-item {
+	background: #fff;
+	border: 1px solid #e2e8f0;
+	border-radius: 18px;
+	overflow: hidden;
+	box-shadow: 0 1px 4px rgba(15,23,42,0.05);
 }
 
 .swio-accordion-toggle {
-    width: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    border: 0;
-    background: transparent;
-    padding: 18px 20px;
-    font-size: 16px;
-    font-weight: 700;
-    text-align: left;
-    cursor: pointer;
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	width: 100%;
+	padding: 18px 22px;
+	background: #fff;
+	border: none;
+	cursor: pointer;
+	font-size: 15px;
+	font-weight: 700;
+	color: #0f172a;
+	text-align: left;
+	gap: 12px;
+	border-bottom: 1px solid transparent;
+	transition: border-color .15s;
 }
 
-.swio-accordion-toggle:focus {
-    outline: 2px solid #2271b1;
-    outline-offset: 2px;
+.swio-accordion-toggle:hover {
+	background: #f8fafc;
 }
 
-.swio-accordion-panel {
-    padding: 0 20px 20px;
-    border-top: 1px solid #f0f0f1;
-}
-
-.swio-accordion-item.is-open .swio-accordion-icon {
-    transform: rotate(45deg);
+.swio-accordion-item.is-open .swio-accordion-toggle {
+	border-bottom-color: #f1f5f9;
 }
 
 .swio-accordion-icon {
-    flex: 0 0 auto;
-    font-size: 24px;
-    line-height: 1;
-    transition: transform 0.2s ease;
+	flex-shrink: 0;
+	font-size: 20px;
+	color: #94a3b8;
+	font-weight: 400;
+	line-height: 1;
+	transition: transform .15s ease;
 }
 
-.swio-actions-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(520px, 1fr));
-    gap: 14px;
-    margin: 16px 0 18px;
+.swio-accordion-item.is-open .swio-accordion-icon {
+	transform: rotate(45deg);
 }
 
-.swio-action-card {
-    padding: 24px;
-    min-height: 220px;
+.swio-accordion-panel {
+	padding: 20px 22px;
 }
 
-.swio-action-card .button {
-    min-height: 42px;
+/* ─── Settings form (form-table override) ────────── */
+.swio-settings-form .form-table th {
+	font-size: 13px;
+	font-weight: 600;
+	color: #374151;
+	padding: 12px 0;
+	width: 200px;
 }
 
-.swio-action-card p {
-    max-width: 68ch;
+.swio-settings-form .form-table td {
+	padding: 10px 0;
+	font-size: 13px;
+	color: #1e293b;
 }
 
-.swio-action-card h3 {
-    margin-top: 0;
-    margin-bottom: 8px;
+.swio-settings-form .form-table input[type="number"],
+.swio-settings-form .form-table input[type="text"] {
+	border-radius: 9px !important;
+	border-color: #e2e8f0 !important;
+	font-size: 13px;
+	height: 34px;
+	padding: 0 10px;
+	width: 100px;
 }
 
-.swio-action-card p:last-child {
-    margin-bottom: 0;
+.swio-settings-form .form-table label {
+	font-size: 13px;
+	color: #1e293b;
 }
 
-.swio-action-status {
-    margin-top: 14px;
-    padding-top: 14px;
-    border-top: 1px solid #ececec;
+/* Toggle switche pro checkboxy */
+.swio-settings-form input[type="checkbox"] {
+	appearance: none;
+	-webkit-appearance: none;
+	position: relative;
+	width: 34px;
+	height: 20px;
+	border-radius: 999px;
+	background: #e2e8f0;
+	border: none !important;
+	outline: none;
+	cursor: pointer;
+	flex-shrink: 0;
+	transition: background .15s ease;
+	margin: 0 6px 0 0;
+	padding: 0 !important;
+	vertical-align: middle;
+	box-shadow: none !important;
 }
 
-.swio-progress {
-    height: 10px;
-    border-radius: 999px;
-    background: #edf1f5;
-    overflow: hidden;
-    margin-bottom: 10px;
+/* Odsazení mezi řádky s toggle switchi */
+.swio-settings-form .form-table td label {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 10px;
+	line-height: 1.4;
 }
 
-.swio-progress-bar {
-    height: 100%;
-    background: #2271b1;
-    border-radius: 999px;
-    transition: width 0.2s ease;
+.swio-settings-form .form-table td label:last-child {
+	margin-bottom: 0;
 }
 
-.swio-details {
-    margin-top: 10px;
+.swio-settings-form input[type="checkbox"]::after {
+	content: '';
+	position: absolute;
+	top: 2px;
+	left: 2px;
+	width: 16px;
+	height: 16px;
+	border-radius: 50%;
+	background: #fff;
+	box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+	transition: transform .15s ease;
 }
 
-.swio-result-list {
-    margin: 10px 0 0 18px;
+.swio-settings-form input[type="checkbox"]:checked {
+	background: #0576b5;
 }
 
-.swio-errors {
-    color: #b32d2e;
+.swio-settings-form input[type="checkbox"]:checked::after {
+	transform: translateX(14px);
 }
 
-.swio-button-danger {
-    background: #b32d2e !important;
-    border-color: #b32d2e !important;
-}
-
+/* ─── Size grid (správa velikostí) ───────────────── */
 .swio-size-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-    gap: 10px;
-    max-height: 340px;
-    overflow: auto;
-    padding-right: 4px;
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+	gap: 8px;
+	margin-bottom: 8px;
 }
 
 .swio-size-item {
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
-    padding: 10px 12px;
-    border: 1px solid #e2e4e7;
-    border-radius: 12px;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 10px 12px;
+	border: 1px solid #e2e8f0;
+	border-radius: 12px;
+	background: #f8fafc;
+	cursor: pointer;
+	font-size: 12px;
+	color: #64748b;
+	line-height: 1.3;
+	transition: border-color .1s, background .1s;
+	text-align: left;
 }
 
+.swio-size-item:hover { background: #f0f7ff; border-color: #bfdbfe; }
 
+.swio-size-item input[type="checkbox"] {
+	margin: 0 !important;
+	flex-shrink: 0;
+}
+
+.swio-size-item > span {
+	display: flex;
+	flex-direction: column;
+	gap: 0;
+}
+
+.swio-size-item strong {
+	color: #0f172a;
+	font-size: 12px;
+	font-weight: 600;
+	line-height: 1.3;
+}
+
+.swio-size-item span span {
+	color: #94a3b8;
+	font-size: 11px;
+	line-height: 1.3;
+}
+
+/* ─── Actions grid (servisní nástroje) ───────────── */
+.swio-actions-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 12px;
+	margin-bottom: 16px;
+}
+
+.swio-action-card {
+	background: #f8fafc;
+	border: 1px solid #e2e8f0;
+	border-radius: 14px;
+	padding: 16px 18px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.swio-action-card h3 {
+	font-size: 13px;
+	font-weight: 700;
+	color: #0f172a;
+	margin: 0;
+}
+
+.swio-action-card p {
+	font-size: 12px;
+	color: #64748b;
+	margin: 0;
+	line-height: 1.4;
+}
+
+.swio-action-card .button {
+	align-self: flex-start;
+	margin-top: auto;
+}
+
+.swio-action-card--danger {
+	border-color: #fecaca;
+	background: #fff5f5;
+}
+
+.swio-action-card--danger h3 { color: #dc2626; }
+
+.swio-action-status {
+	font-size: 12px;
+	color: #64748b;
+	margin-top: 6px;
+}
+
+/* ─── Log toolbar + log items ────────────────────── */
 .swio-log-toolbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    margin: 4px 0 18px;
-    flex-wrap: wrap;
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 12px;
+	margin-bottom: 16px;
+	padding-bottom: 16px;
+	border-bottom: 1px solid #f1f5f9;
 }
 
 .swio-log-toolbar p {
-    margin: 0;
+	margin: 0;
+	font-size: 12px;
+	color: #94a3b8;
 }
 
 .swio-inline-action {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 12px;
-}
-
-.swio-inline-action .swio-action-status {
-    margin-top: 0;
-    padding-top: 0;
-    border-top: 0;
-    width: 100%;
+	display: flex;
+	align-items: center;
+	gap: 10px;
 }
 
 .swio-log-list {
-    display: grid;
-    gap: 10px;
-    margin-top: 18px;
-    max-height: 440px;
-    overflow: auto;
-    padding-right: 4px;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
 }
 
 .swio-log-item {
-    padding: 12px 14px;
-    border-radius: 12px;
-    border: 1px solid #e2e4e7;
-    background: #f8f9fa;
+	padding: 10px 14px;
+	border-radius: 10px;
+	border-left: 3px solid #e2e8f0;
+	background: #f8fafc;
+	font-size: 12px;
 }
+
+.swio-log-info    { border-left-color: #60a5fa; }
+.swio-log-success { border-left-color: #4ade80; background: #f0fdf4; }
+.swio-log-warning { border-left-color: #fbbf24; background: #fffbeb; }
+.swio-log-error   { border-left-color: #f87171; background: #fff5f5; }
 
 .swio-log-meta {
-    font-size: 12px;
-    color: #646970;
-    margin-bottom: 6px;
+	font-size: 11px;
+	color: #94a3b8;
+	margin-bottom: 3px;
+	text-transform: uppercase;
+	letter-spacing: .03em;
 }
 
-.swio-log-warning {
-    background: #fff8e5;
-    border-color: #f0c36d;
+.swio-log-message { color: #1e293b; line-height: 1.4; }
+
+/* ─── Global notices (AJAX) ──────────────────────── */
+#swio-global-notices .notice {
+	border-radius: 12px !important;
+	margin-bottom: 10px !important;
 }
 
-.swio-log-error {
-    background: #fff1f0;
-    border-color: #e59c9c;
+/* ─── Responzivita ───────────────────────────────── */
+
+/* ─── Savings karta ──────────────────────────────── */
+.swio-card--savings {
+	border-color: #bfdbfe;
+	background: #f0f7ff;
+}
+
+.swio-card--savings .swio-card-label { color: #1d4ed8; }
+.swio-card--savings .swio-card-value { color: #1e40af; }
+
+/* ─── Bulk action card ───────────────────────────── */
+.swio-action-card--bulk {
+	background: #f0f7ff;
+	border-color: #bfdbfe;
+}
+
+.swio-action-card--bulk h3 {
+	color: #1e3a8a;
+}
+
+.swio-action-card--bulk p {
+	color: #3b5898;
+}
+
+.swio-bulk-actions {
+	display: flex;
+	gap: 10px;
+	align-items: center;
+	flex-wrap: wrap;
+	margin-top: 4px;
+}
+
+/* ─── Preview výsledek ───────────────────────────── */
+.swio-preview-result {
+	margin-bottom: 14px;
+}
+
+.swio-preview-box {
+	background: #fff;
+	border: 1px solid #e2e8f0;
+	border-radius: 12px;
+	overflow: hidden;
+}
+
+.swio-preview-row {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	padding: 10px 16px;
+	font-size: 13px;
+	border-bottom: 1px solid #f8fafc;
+	color: #64748b;
+}
+
+.swio-preview-row:last-of-type { border-bottom: none; }
+
+.swio-preview-row strong { color: #0f172a; font-weight: 700; }
+
+.swio-preview-row--highlight {
+	background: #f0f7ff;
+	color: #1e40af;
+}
+
+.swio-preview-row--highlight strong { color: #1d4ed8; font-size: 15px; }
+
+.swio-preview-note {
+	padding: 10px 16px;
+	margin: 0;
+	font-size: 12px;
+	color: #94a3b8;
+	border-top: 1px solid #f1f5f9;
+	background: #fafcff;
+}
+
+.swio-preview-error {
+	color: #dc2626;
+	font-size: 13px;
+	margin: 0;
+	padding: 10px 0;
+}
+
+/* ─── Progress bar ───────────────────────────────── */
+.swio-progress-wrap {
+	margin-bottom: 14px;
+}
+
+.swio-progress-bar-track {
+	height: 8px;
+	background: #e2e8f0;
+	border-radius: 999px;
+	overflow: hidden;
+	margin-bottom: 6px;
+}
+
+.swio-progress-bar {
+	height: 100%;
+	background: linear-gradient(90deg, #0576b5, #0096E2);
+	border-radius: 999px;
+	transition: width .3s ease;
+}
+
+.swio-progress-label {
+	font-size: 12px;
+	color: #64748b;
+	text-align: right;
+}
+
+/* ─── Skip checkbox ──────────────────────────────── */
+.swio-skip-label {
+	display: inline-flex;
+	align-items: center;
+	gap: 10px;
+	font-size: 13px;
+	color: #1e3a8a;
+	margin-bottom: 12px;
+	cursor: pointer;
+	font-weight: 500;
+}
+
+/* Toggle switch pro skip-label */
+.swio-skip-label input[type="checkbox"] {
+	appearance: none !important;
+	-webkit-appearance: none !important;
+	position: relative !important;
+	width: 34px !important;
+	height: 20px !important;
+	border-radius: 999px !important;
+	background: #cbd5e1 !important;
+	border: none !important;
+	outline: none !important;
+	cursor: pointer !important;
+	flex-shrink: 0 !important;
+	transition: background .15s ease !important;
+	margin: 0 !important;
+	padding: 0 !important;
+	box-shadow: none !important;
+}
+
+.swio-skip-label input[type="checkbox"]::after {
+	content: '' !important;
+	position: absolute !important;
+	top: 2px !important;
+	left: 2px !important;
+	width: 16px !important;
+	height: 16px !important;
+	border-radius: 50% !important;
+	background: #fff !important;
+	box-shadow: 0 1px 3px rgba(0,0,0,0.2) !important;
+	transition: transform .15s ease !important;
+}
+
+.swio-skip-label input[type="checkbox"]:checked {
+	background: #0576b5 !important;
+}
+
+.swio-skip-label input[type="checkbox"]:checked::after {
+	transform: translateX(14px) !important;
+}
+
+.swio-bulk-status {
+	font-size: 13px;
+	color: #64748b;
+	margin-bottom: 10px;
+	min-height: 18px;
 }
 
 @media (max-width: 960px) {
-    .swio-wrap {
-        margin-right: 12px;
-    }
-
-    .swio-hero {
-        grid-template-columns: 1fr;
-        padding: 22px;
-    }
-
-    .swio-hero h1 {
-        font-size: 34px;
-    }
-
-    .swio-hero__meta {
-        width: 100%;
-        justify-content: flex-start;
-    }
-
-    .swio-stat {
-        min-width: 0;
-        width: 100%;
-    }
+	.swio-hero { padding: 22px 18px 26px; }
+	.swio-wrap { margin-right: 10px; }
+	.swio-main-content, .swio-page-notices { padding-left: 18px; padding-right: 18px; }
+	.swio-cards { grid-template-columns: repeat(3, 1fr); }
+	.swio-actions-grid { grid-template-columns: 1fr; }
+	.swio-license-grid { grid-template-columns: 1fr; }
+	.swio-license-item { border-right: none; border-bottom: 1px solid #f1f5f9; }
+	.swio-license-item:last-child { border-bottom: none; }
 }
 
 @media (max-width: 782px) {
-    .swio-wrap {
-        margin: 16px 10px 0 0;
-    }
-
-    .swio-hero {
-        padding: 20px;
-        border-radius: 24px;
-    }
-
-    .swio-badge {
-        margin-bottom: 16px;
-    }
-
-    .swio-hero h1 {
-        font-size: 1.8rem;
-        line-height: 1.15;
-        margin-bottom: 12px;
-    }
-
-    .swio-hero__meta {
-        width: 100%;
-        justify-content: flex-start;
-        margin-top: 8px;
-    }
-
-    .swio-stat {
-        width: 100%;
-        padding: 16px 18px;
-        border-radius: 18px;
-    }
-
-    .swio-accordion-toggle,
-    .swio-accordion-panel,
-    .swio-card,
-    .swio-action-card {
-        padding-left: 16px;
-        padding-right: 16px;
-    }
-
-    .swio-accordion-panel {
-        padding-bottom: 16px;
-    }
+	.swio-hero { padding: 20px 16px 24px; flex-direction: column; gap: 14px; }
+	.swio-hero h1 { font-size: 24px !important; }
+	.swio-hero__content { width: 100%; flex: 0 0 auto; }
+	.swio-hero__meta {
+		flex-direction: row !important;
+		align-items: center;
+		justify-content: space-between;
+		width: 100%;
+		gap: 10px;
+	}
+	.swio-stat {
+		flex: 0 0 auto;
+		text-align: left;
+		min-width: 0;
+		padding: 10px 14px;
+		width: auto;
+	}
+	.swio-stat strong { font-size: 18px; }
+	.swio-main-content, .swio-page-notices { padding-left: 16px; padding-right: 16px; }
+	.swio-cards { grid-template-columns: 1fr 1fr; }
+	.swio-accordion-panel { padding: 16px 18px; }
+	.swio-accordion-toggle { padding: 16px 18px; }
+	.swio-license-card__header { padding: 16px 18px 14px; flex-direction: column; align-items: flex-start; gap: 10px; }
+	.swio-license-item { padding: 12px 18px; }
+	.swio-license-form-wrap { padding: 16px 18px; }
+	.swio-settings-form .form-table th { width: 150px; }
 }
 
-
-@media (max-width: 782px) {
-    .swio-log-toolbar {
-        align-items: stretch;
-    }
-
-    .swio-inline-action,
-    .swio-inline-action .button {
-        width: 100%;
-    }
+@media (max-width: 600px) {
+	.swio-hero { padding: 18px 14px 20px; }
+	.swio-hero h1 { font-size: 20px !important; }
+	.swio-badge { font-size: 10px; padding: 3px 10px; margin-bottom: 10px; }
+	.swio-cards { grid-template-columns: 1fr; }
+	.swio-accordion-item { border-radius: 14px; }
+	.swio-cards { grid-template-columns: repeat(2, 1fr); }
 }
 
-@media (max-width: 960px) {
-    .swio-license-grid {
-        grid-template-columns: 1fr;
-    }
-
-    .swio-license-card__header {
-        flex-direction: column;
-        align-items: stretch;
-    }
-}
-
-@media (max-width: 782px) {
-    .swio-license-card {
-        padding: 20px;
-    }
-
-    .swio-license-actions {
-        flex-direction: column;
-        align-items: stretch;
-    }
-}
-
-.swio-inline-checkbox {
-    display: flex;
-    align-items: flex-start;
-    gap: 8px;
-    margin: 12px 0 16px;
-    color: #334155;
-}
-
-.swio-inline-stats {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 12px;
-    margin: 10px 0 0;
-}
-
-.swio-inline-stats span {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 10px;
-    border-radius: 999px;
-    background: #f8fafc;
-    border: 1px solid #e2e8f0;
+@media (max-width: 480px) {
+	.swio-cards { grid-template-columns: 1fr; }
 }
