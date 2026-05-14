@@ -2,7 +2,7 @@
 /*
 Plugin Name: Optimalizace obrázků
 Description: Automatické zmenšování obrázků, bezpečnější správa náhledů, přegenerování metadata a interní monitoring velikosti webu.
-Version: 1.1
+Version: 1.2
 Author: Smart Websites
 Author URI: https://smart-websites.cz
 Update URI: https://github.com/paveltravnicek/sw-image-optimizer/
@@ -14,6 +14,10 @@ SW License Group: both
 
 if (!defined('ABSPATH')) {
     exit;
+}
+
+if ( ! defined( 'ABSPATH' ) ) {
+	exit;
 }
 
 require __DIR__ . '/plugin-update-checker/plugin-update-checker.php';
@@ -30,12 +34,14 @@ $swUpdateChecker->setBranch('main');
 $swUpdateChecker->getVcsApi()->enableReleaseAssets('/\.zip$/i');
 
 final class SW_Image_Optimizer {
-    const VERSION = '1.1';
+    const VERSION = '1.2';
     const LICENSE_OPTION = 'swio_license';
     const LICENSE_CRON_HOOK = 'swio_license_daily_check';
     const HUB_BASE = 'https://smart-websites.cz';
     const PLUGIN_SLUG = 'sw-image-optimizer';
-    const OPTION_SETTINGS = 'swio_settings';
+    const OPTION_SETTINGS  = 'swio_settings';
+    const OPTION_SAVINGS   = 'swio_total_savings';
+    const OPTION_OPT_FLAG  = '_swio_optimized';
     const OPTION_LOGS = 'swio_logs';
     const OPTION_NOTICE = 'swio_admin_notice';
     const CRON_SIZE_HOOK = 'swio_check_site_size_weekly';
@@ -65,6 +71,7 @@ final class SW_Image_Optimizer {
         add_action('admin_enqueue_scripts', [$this, 'enqueue_assets']);
         add_action('wp_ajax_swio_run_action', [$this, 'ajax_run_action']);
         add_action('wp_ajax_swio_get_logs', [$this, 'ajax_get_logs']);
+        add_action('wp_ajax_swio_optimization_preview', [$this, 'ajax_optimization_preview']);
         add_filter('wp_handle_upload_prefilter', [$this, 'prefilter_upload']);
         add_filter('wp_handle_upload', [$this, 'handle_uploaded_image']);
         add_filter('intermediate_image_sizes_advanced', [$this, 'filter_intermediate_image_sizes']);
@@ -209,9 +216,10 @@ final class SW_Image_Optimizer {
             'process_webp'               => 1,
             'process_avif'               => 1,
             'block_extreme_uploads'      => 0,
-            'extreme_dimension_limit'    => 6000,
-            'extreme_filesize_limit_mb'  => 15,
+            'extreme_dimension_limit'    => 4000,
+            'extreme_filesize_limit_mb'  => 10,
             'update_htaccess_fallback'   => 1,
+            'skip_optimized'             => 1,
         ];
     }
 
@@ -253,6 +261,7 @@ final class SW_Image_Optimizer {
         $sanitized['extreme_dimension_limit'] = max(1000, min(20000, absint($input['extreme_dimension_limit'] ?? $defaults['extreme_dimension_limit'])));
         $sanitized['extreme_filesize_limit_mb'] = max(1, min(200, absint($input['extreme_filesize_limit_mb'] ?? $defaults['extreme_filesize_limit_mb'])));
         $sanitized['update_htaccess_fallback'] = empty($input['update_htaccess_fallback']) ? 0 : 1;
+        $sanitized['skip_optimized'] = empty($input['skip_optimized']) ? 0 : 1;
 
         return $sanitized;
     }
@@ -272,6 +281,9 @@ final class SW_Image_Optimizer {
         wp_enqueue_style('swio-admin', plugin_dir_url(__FILE__) . 'assets/admin.css', [], $css_version);
         wp_enqueue_script('swio-admin', plugin_dir_url(__FILE__) . 'assets/admin.js', [], $js_version, true);
         wp_localize_script('swio-admin', 'swioAdmin', [
+            'ajaxUrl'        => admin_url('admin-ajax.php'),
+            'previewNonce'   => wp_create_nonce('swio_nonce'),
+            'savingsMb'      => $this->get_savings_mb(),
             'ajaxUrl'        => admin_url('admin-ajax.php'),
             'nonce'          => wp_create_nonce(self::NONCE_ACTION),
             'logsNonce'      => wp_create_nonce(self::NONCE_ACTION),
@@ -772,8 +784,17 @@ private function resize_existing_images_batch($offset = 0) {
     $skipped = 0;
     $total = $this->get_total_attachment_count();
 
+    $skip_optimized = !empty($settings['skip_optimized']);
+
     foreach ($ids as $attachment_id) {
         $processed++;
+
+        // Přeskočit již optimalizované
+        if ($skip_optimized && get_post_meta((int) $attachment_id, self::OPTION_OPT_FLAG, true)) {
+            $skipped++;
+            continue;
+        }
+
         $files = $this->get_attachment_processing_files((int) $attachment_id);
 
         if (empty($files)) {
@@ -807,6 +828,12 @@ private function resize_existing_images_batch($offset = 0) {
 
             if ($result['changed']) {
                 $resized++;
+                // Uložit úspory
+                if (!empty($result['saved_bytes'])) {
+                    $this->add_savings((int) $result['saved_bytes']);
+                }
+                // Označit přílohu jako optimalizovanou
+                update_post_meta((int) $attachment_id, self::OPTION_OPT_FLAG, time());
                 if (count($details) < self::DETAIL_LIMIT) {
                     $details[] = sprintf('%s — zmenšeno z %spx na %spx.', $this->normalize_upload_relative_path($file_path), $result['before_max'], $result['after_max']);
                 }
@@ -1319,6 +1346,48 @@ private function update_missing_thumbnails_htaccess() {
         update_option(self::OPTION_LOGS, array_values($filtered), false);
     }
 
+    private function add_savings(int $bytes): void {
+        $current = (int) get_option(self::OPTION_SAVINGS, 0);
+        update_option(self::OPTION_SAVINGS, $current + $bytes, false);
+    }
+
+    private function get_savings_mb(): float {
+        return round((int) get_option(self::OPTION_SAVINGS, 0) / 1048576, 2);
+    }
+
+    public function ajax_optimization_preview() {
+        check_ajax_referer('swio_nonce', 'nonce');
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error('forbidden');
+        }
+
+        $settings       = $this->get_settings();
+        $total          = $this->get_total_attachment_count();
+        $skip_optimized = !empty($settings['skip_optimized']);
+
+        $already_optimized = 0;
+        if ($skip_optimized) {
+            global $wpdb;
+            $already_optimized = (int) $wpdb->get_var(
+                $wpdb->prepare(
+                    "SELECT COUNT(*) FROM {$wpdb->postmeta} WHERE meta_key = %s",
+                    self::OPTION_OPT_FLAG
+                )
+            );
+        }
+
+        $to_process = $total - ($skip_optimized ? $already_optimized : 0);
+
+        wp_send_json_success([
+            'total'             => $total,
+            'already_optimized' => $already_optimized,
+            'to_process'        => max(0, $to_process),
+            'max_dimension'     => $settings['max_dimension'],
+            'jpeg_quality'      => $settings['jpeg_quality'],
+            'skip_optimized'    => $skip_optimized,
+        ]);
+    }
+
     private function get_logs() {
         $logs = get_option(self::OPTION_LOGS, []);
         if (!is_array($logs)) {
@@ -1400,15 +1469,25 @@ private function update_missing_thumbnails_htaccess() {
                         <strong><?php echo esc_html(self::VERSION); ?></strong>
                         <span><?php echo esc_html__('Verze pluginu', 'sw-image-optimizer'); ?></span>
                     </div>
+                    <span class="swio-hero-status swio-hero-status--<?php echo $is_operational ? 'active' : 'inactive'; ?>">
+                        <span class="swio-hero-status__dot"></span>
+                        <?php echo $is_operational ? esc_html__('Platná licence', 'sw-image-optimizer') : esc_html__('Licence chybí', 'sw-image-optimizer'); ?>
+                    </span>
                 </div>
             </div>
 
-            <?php $this->render_notice(); ?>
+            <div class="swio-page-notices">
+                <?php $this->render_notice(); ?>
+                <?php if (!empty($_GET['swio_license_message'])) : ?>
+                    <div class="notice notice-success"><p><?php echo esc_html(sanitize_text_field((string) $_GET['swio_license_message'])); ?></p></div>
+                <?php endif; ?>
+                <?php if (!$is_operational) : ?>
+                    <div class="notice notice-warning"><p><?php echo esc_html__('Plugin momentálně nemá platnou licenci. Nastavení zůstává pouze pro čtení, automatická optimalizace se neprovádí a servisní akce jsou zablokované.', 'sw-image-optimizer'); ?></p></div>
+                <?php endif; ?>
+            </div>
             <div id="swio-global-notices"></div>
-            <?php if (!empty($_GET['swio_license_message'])) : ?>
-                <div class="notice notice-success"><p><?php echo esc_html(sanitize_text_field((string) $_GET['swio_license_message'])); ?></p></div>
-            <?php endif; ?>
 
+            <div class="swio-main-content">
             <div class="swio-license-card">
                 <div class="swio-license-card__header">
                     <div>
@@ -1457,10 +1536,6 @@ private function update_missing_thumbnails_htaccess() {
                 <?php endif; ?>
             </div>
 
-            <?php if (!$is_operational) : ?>
-                <div class="notice notice-warning"><p><?php echo esc_html__('Plugin momentálně nemá platnou licenci. Nastavení zůstává pouze pro čtení, automatická optimalizace se neprovádí a servisní akce jsou zablokované.', 'sw-image-optimizer'); ?></p></div>
-            <?php endif; ?>
-
             <div class="swio-cards">
                 <div class="swio-card">
                     <div class="swio-card-label">Velikost wp-content</div>
@@ -1478,6 +1553,10 @@ private function update_missing_thumbnails_htaccess() {
                     <div class="swio-card-label">Zálohy</div>
                     <div class="swio-card-value"><?php echo esc_html($report['backups_mb']); ?> MB</div>
                 </div>
+                <div class="swio-card swio-card--savings">
+                    <div class="swio-card-label">Ušetřeno optimalizací</div>
+                    <div class="swio-card-value swio-savings-value"><?php echo esc_html(number_format_i18n($this->get_savings_mb(), 2)); ?> MB</div>
+                </div>
             </div>
 
             <div class="swio-accordion" data-swio-accordion>
@@ -1493,7 +1572,7 @@ private function update_missing_thumbnails_htaccess() {
                             <table class="form-table" role="presentation">
                                 <tr>
                                     <th scope="row">Automatická optimalizace</th>
-                                    <td><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[enabled]" value="1" <?php checked($settings['enabled'], 1); ?>> Zapnout automatické zmenšení po nahrání</label></td>
+                                    <td><input type="hidden" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[enabled]" value="0"><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[enabled]" value="1" <?php checked($settings['enabled'], 1); ?>> Zapnout automatické zmenšení po nahrání</label></td>
                                 </tr>
                                 <tr>
                                     <th scope="row">Maximální rozměr</th>
@@ -1510,9 +1589,9 @@ private function update_missing_thumbnails_htaccess() {
                                 <tr>
                                     <th scope="row">Podporované formáty</th>
                                     <td>
-                                        <label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[process_jpg]" value="1" <?php checked($settings['process_jpg'], 1); ?>> JPG/JPEG</label><br>
-                                        <label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[process_png]" value="1" <?php checked($settings['process_png'], 1); ?>> PNG</label><br>
-                                        <label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[process_webp]" value="1" <?php checked($settings['process_webp'], 1); ?>> WebP</label>
+                                        <input type="hidden" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[process_jpg]" value="0"><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[process_jpg]" value="1" <?php checked($settings['process_jpg'], 1); ?>> JPG/JPEG</label><br>
+                                        <input type="hidden" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[process_png]" value="0"><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[process_png]" value="1" <?php checked($settings['process_png'], 1); ?>> PNG</label><br>
+                                        <input type="hidden" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[process_webp]" value="0"><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[process_webp]" value="1" <?php checked($settings['process_webp'], 1); ?>> WebP</label>
                                     </td>
                                 </tr>
                                 <tr>
@@ -1592,7 +1671,32 @@ private function update_missing_thumbnails_htaccess() {
                         <fieldset <?php disabled(!$is_operational); ?>>
                         <div class="swio-actions-grid">
                             <?php $this->render_action_card('check_sizes', 'Zkontrolovat velikost webu', 'Provede ruční kontrolu velikosti složek a uloží výsledek do logu.', false); ?>
-                            <?php $this->render_action_card('resize_existing', 'Změnit rozměry existujících obrázků', 'Projde pouze originální obrázky a standardní velikosti evidované WordPressem. Externí varianty mimo metadata přeskočí.', true); ?>
+                            <div class="swio-action-card swio-action-card--bulk">
+                                <h3><?php esc_html_e('Hromadná optimalizace existujících obrázků', 'sw-image-optimizer'); ?></h3>
+                                <p><?php esc_html_e('Projde originální obrázky v knihovně a zmenší ty, které překračují nastavený rozměr. Před spuštěním si zobrazte náhled.', 'sw-image-optimizer'); ?></p>
+                                <label class="swio-skip-label">
+                                    <input type="hidden" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[skip_optimized]" value="0">
+                                    <input type="checkbox" name="<?php echo esc_attr(self::OPTION_SETTINGS); ?>[skip_optimized]" value="1" <?php checked($settings['skip_optimized'] ?? 1, 1); ?> id="swio-skip-optimized">
+                                    <?php esc_html_e('Přeskočit již optimalizované', 'sw-image-optimizer'); ?>
+                                </label>
+                                <div id="swio-preview-result" class="swio-preview-result" style="display:none"></div>
+                                <div id="swio-progress-wrap" class="swio-progress-wrap" style="display:none">
+                                    <div class="swio-progress-bar-track">
+                                        <div id="swio-progress-bar" class="swio-progress-bar" style="width:0%"></div>
+                                    </div>
+                                    <div id="swio-progress-label" class="swio-progress-label">0 %</div>
+                                </div>
+                                <div id="swio-bulk-status" class="swio-action-status" hidden></div>
+                                <div class="swio-bulk-actions">
+                                    <button type="button" id="swio-preview-btn" class="button button-secondary"><?php esc_html_e('Zobrazit náhled', 'sw-image-optimizer'); ?></button>
+                                    <button
+                                        type="button"
+                                        class="button button-primary swio-run-action"
+                                        data-swio-action="resize_existing"
+                                        data-swio-batch="1"
+                                    ><?php esc_html_e('Spustit optimalizaci', 'sw-image-optimizer'); ?></button>
+                                </div>
+                            </div>
                             <?php $this->render_action_card('simulate_cleanup', 'Simulovat mazání evidovaných náhledů', 'Ukáže, které soubory by šly pryč a proč. Prochází dávkově až do konce.', true); ?>
                             <?php $this->render_action_card('delete_cleanup', 'Smazat evidované náhledy', 'Odstraní jen velikosti evidované v metadata příloh a případně aktualizuje uploads/.htaccess fallback.', true, 'danger'); ?>
                             <?php $this->render_action_card('regenerate_metadata', 'Přegenerovat metadata a náhledy', 'Přegeneruje metadata a aktuálně povolené velikosti pro všechny přílohy.', true); ?>
@@ -1641,6 +1745,7 @@ private function update_missing_thumbnails_htaccess() {
                     </div>
                 </div>
             </div>
+        </div><!-- /.swio-main-content -->
         </div>
         <?php
     }
